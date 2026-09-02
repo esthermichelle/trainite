@@ -53,7 +53,7 @@ tests/
 ├── conftest.py                     # Shared pytest fixtures
 ├── utils_test.py                   # Config loading and instantiation
 ├── config/
-│   └── base_test.py                # Config validation and defaults
+│   └── base_test.py                # Config validation tests
 ├── datasets/
 │   ├── counting_test.py            # Counting dataset tests
 │   ├── hugging_face_test.py        # Hugging Face dataset integration
