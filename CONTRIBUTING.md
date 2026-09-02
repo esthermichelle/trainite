@@ -62,7 +62,7 @@ tests/
 ├── models/
 │   └── transformer_test.py         # Model forward pass and generation
 ├── preprocessors/
-│   └── char_test.py                # Character tokenizer preprocessors
+│   └── char_test.py                # Character tokenizer tests
 └── trainers/
     └── decoder_trainer_test.py     # Training loop integration
 ```
