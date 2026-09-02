@@ -57,7 +57,7 @@ tests/
 ├── datasets/
 │   ├── counting_test.py            # Counting dataset behavior
 │   ├── hugging_face_test.py        # Hugging Face dataset integration
-│   ├── string_reverse_test.py      # String reverse dataset and tokenizer
+│   ├── string_reverse_test.py      # String reverse dataset tests
 │   └── transformed_test.py         # Transformed dataset wrappers
 ├── models/
 │   └── transformer_test.py         # Model forward pass and generation
