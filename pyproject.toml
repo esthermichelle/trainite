@@ -87,8 +87,8 @@ integrations = [
 ]
 docs = [
     "mkdocs>=1.6.1",
+    "mkdocs-material",
 ]
-
 [tool.ruff]
 src = ["trainite", "examples", "tests"]
 exclude = [
