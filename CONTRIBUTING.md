@@ -55,7 +55,7 @@ tests/
 ├── config/
 │   └── base_test.py                # Config validation and defaults
 ├── datasets/
-│   ├── counting_test.py            # Counting dataset behavior
+│   ├── counting_test.py            # Counting dataset tests
 │   ├── hugging_face_test.py        # Hugging Face dataset integration
 │   ├── string_reverse_test.py      # String reverse dataset tests
 │   └── transformed_test.py         # Transformed dataset wrappers
