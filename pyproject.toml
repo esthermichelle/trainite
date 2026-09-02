@@ -85,6 +85,9 @@ dev = [
 integrations = [
     "skypilot",
 ]
+docs = [
+    "mkdocs>=1.6.1",
+]
 
 [tool.ruff]
 src = ["trainite", "examples", "tests"]
