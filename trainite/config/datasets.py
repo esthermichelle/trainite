@@ -142,3 +142,37 @@ class HuggingFaceDataConfig(DataWithAutoSplit):
             shuffle=True,
         )
     )
+
+
+class WikiTextTransformConfig(TransformConfig):
+    target: Literal[
+        "trainite.datasets.wikitext.WikiTextTransform",
+        "dataset_impl.wikitext.WikiTextTransform",
+    ] = Field(
+        default="trainite.datasets.wikitext.WikiTextTransform",
+        alias="_target_",
+    )
+    max_length: int = Field(default=128, gt=1)
+
+
+class WikiTextDatasetConfig(HuggingFaceDatasetConfig):
+    path: Literal["Salesforce/wikitext"] = "Salesforce/wikitext"
+    name: Literal[
+        "wikitext-103-raw-v1",
+        "wikitext-103-v1",
+        "wikitext-2-raw-v1",
+        "wikitext-2-v1",
+    ] = "wikitext-2-raw-v1"
+
+
+class WikiTextDataConfig(DataWithAutoSplit):
+    dataset: WikiTextDatasetConfig = Field(default_factory=WikiTextDatasetConfig)
+    transform: WikiTextTransformConfig = Field(default_factory=WikiTextTransformConfig)
+    test_ratio: float = 0.1
+    val_ratio: float = 0.1
+    dataloader: DataLoaderConfig = Field(
+        default_factory=lambda: DataLoaderConfig(
+            batch_size=32,
+            shuffle=True,
+        )
+    )
