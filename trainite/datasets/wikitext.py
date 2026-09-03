@@ -23,10 +23,7 @@ class WikiTextTransform:
     WikiText samples contain a single ``text`` field. The complete text is
     used as the autoregressive training sequence.
 
-    Layout:
-
-        input_ids:  [BOS] text
-        labels:     text [EOS]
+    Special tokens are added by the tokenizer.
     """
 
     def __init__(
@@ -43,36 +40,37 @@ class WikiTextTransform:
     def __call__(self, sample: dict[str, object]) -> DatapointModel:
         text = str(sample["text"])
 
-        token_ids = self.tokenizer(
+        tokenized = self.tokenizer(
             text,
-            add_special_tokens=False,
+            add_special_tokens=True,
             truncation=True,
-            max_length=self.max_length - 1,
-        )["input_ids"]
+            max_length=self.max_length,
+        )
 
-        bos = self.tokenizer.bos_token_id
-        eos = self.tokenizer.eos_token_id
+        token_ids = tokenized["input_ids"]
+        attention_mask = tokenized["attention_mask"]
 
-        if bos is None:
-            raise ValueError("Tokenizer must define bos_token_id")
-
-        if eos is None:
-            raise ValueError("Tokenizer must define eos_token_id")
-
-        combined = [bos] + token_ids + [eos]
-
-        input_ids = torch.tensor(combined[:-1], dtype=torch.long)
-        labels = torch.tensor(combined[1:], dtype=torch.long)
-        attention_mask = torch.ones(len(input_ids), dtype=torch.long)
+        input_ids = torch.tensor(
+            token_ids[:-1],
+            dtype=torch.long,
+        )
+        labels = torch.tensor(
+            token_ids[1:],
+            dtype=torch.long,
+        )
+        train_attention_mask = torch.tensor(
+            attention_mask[:-1],
+            dtype=torch.long,
+        )
 
         return DatapointModel(
             source=text,
             target=text,
             train_input_ids=input_ids,
             train_label_ids=labels,
-            attention_mask=attention_mask,
+            attention_mask=train_attention_mask,
             eval_input_ids=torch.tensor(
-                [bos] + token_ids,
+                token_ids[:-1],
                 dtype=torch.long,
             ),
         )

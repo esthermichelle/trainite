@@ -5,14 +5,26 @@ Datasets and applies a causal language-modeling transform to each sample.
 
 ## Configure the dataset
 
-The default configuration uses the WikiText-2 raw dataset:
+The default configuration uses the WikiText-2 raw dataset with explicit train, validation, and
+test splits:
 
 ```yaml
 data:
-  dataset:
-    path: Salesforce/wikitext
-    name: wikitext-2-raw-v1
-    split: train
+  train:
+    dataset:
+      path: Salesforce/wikitext
+      name: wikitext-2-raw-v1
+      split: train
+  val:
+    dataset:
+      path: Salesforce/wikitext
+      name: wikitext-2-raw-v1
+      split: validation
+  test:
+    dataset:
+      path: Salesforce/wikitext
+      name: wikitext-2-raw-v1
+      split: test
 ```
 
 The available WikiText configurations are:
@@ -27,17 +39,18 @@ causal language-modeling sequence.
 
 ## Configure the transform
 
-The transform uses the tokenizer configured by Trainite and supports:
+Each split uses a transform configured with:
 
 ```yaml
 data:
-  transform:
-    max_length: 128
+  train:
+    transform:
+      max_length: 128
 ```
 
 `max_length` controls the maximum sequence length.
 
-The transform adds the tokenizer's BOS and EOS tokens and creates:
+The tokenizer handles special-token addition. The transform creates:
 
 * `train_input_ids`
 * `train_label_ids`
@@ -46,15 +59,9 @@ The transform adds the tokenizer's BOS and EOS tokens and creates:
 
 ## Dataset splits
 
-WikiText provides `train`, `validation`, and `test` splits. Trainite's data configuration can
-create the training/validation split according to the configured ratios.
-
-The default configuration uses:
-
-```yaml
-test_ratio: 0.1
-val_ratio: 0.1
-```
+WikiText provides native `train`, `validation`, and `test` splits on Hugging Face. The default
+configuration maps each split directly to the corresponding Hugging Face split, so no automatic
+splitting is performed.
 
 ## Hugging Face authentication
 

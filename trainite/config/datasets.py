@@ -1,6 +1,13 @@
 from typing import Literal, Self
 from pydantic import Field, model_validator
-from trainite.config.base import DatasetConfig, TransformConfig, DataWithAutoSplit, DataLoaderConfig
+from trainite.config.base import (
+    DatasetConfig,
+    TransformConfig,
+    DataWithAutoSplit,
+    DataLoaderConfig,
+    DataConfigBase,
+    SplitConfig,
+)
 
 
 class PromptCompletionTransformConfig(TransformConfig):
@@ -165,14 +172,42 @@ class WikiTextDatasetConfig(HuggingFaceDatasetConfig):
     ] = "wikitext-2-raw-v1"
 
 
-class WikiTextDataConfig(DataWithAutoSplit):
-    dataset: WikiTextDatasetConfig = Field(default_factory=WikiTextDatasetConfig)
-    transform: WikiTextTransformConfig = Field(default_factory=WikiTextTransformConfig)
-    test_ratio: float = 0.1
-    val_ratio: float = 0.1
-    dataloader: DataLoaderConfig = Field(
-        default_factory=lambda: DataLoaderConfig(
-            batch_size=32,
-            shuffle=True,
+class WikiTextDataConfig(DataConfigBase):
+    train: SplitConfig = Field(
+        default_factory=lambda: SplitConfig(
+            dataset=WikiTextDatasetConfig(
+                split="train",
+            ),
+            transform=WikiTextTransformConfig(),
+            dataloader=DataLoaderConfig(
+                batch_size=32,
+                shuffle=True,
+            ),
+        )
+    )
+
+    val: SplitConfig = Field(
+        default_factory=lambda: SplitConfig(
+            dataset=WikiTextDatasetConfig(
+                split="validation",
+            ),
+            transform=WikiTextTransformConfig(),
+            dataloader=DataLoaderConfig(
+                batch_size=32,
+                shuffle=False,
+            ),
+        )
+    )
+
+    test: SplitConfig = Field(
+        default_factory=lambda: SplitConfig(
+            dataset=WikiTextDatasetConfig(
+                split="test",
+            ),
+            transform=WikiTextTransformConfig(),
+            dataloader=DataLoaderConfig(
+                batch_size=32,
+                shuffle=False,
+            ),
         )
     )

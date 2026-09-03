@@ -5,22 +5,28 @@ from trainite.datasets.wikitext import WikiTextTransform
 
 
 class FakeTokenizer:
-    bos_token_id = 1
-    eos_token_id = 2
-
     def __call__(
         self,
         text,
-        add_special_tokens=False,
-        truncation=False,
-        max_length=None,
+        add_special_tokens=True,
+        truncation=True,
+        max_length=128,
     ):
-        ids = [10, 11, 12]
+        assert add_special_tokens is True
+        assert truncation is True
+
+        # The tokenizer is responsible for adding special tokens.
+        ids = [1, 10, 11, 12, 2]
+        attention_mask = [1, 1, 1, 1, 1]
 
         if max_length is not None:
             ids = ids[:max_length]
+            attention_mask = attention_mask[:max_length]
 
-        return {"input_ids": ids}
+        return {
+            "input_ids": ids,
+            "attention_mask": attention_mask,
+        }
 
 
 def test_wikitext_transform():
@@ -36,17 +42,14 @@ def test_wikitext_transform():
         datapoint.train_input_ids,
         torch.tensor([1, 10, 11, 12]),
     )
-
     assert torch.equal(
         datapoint.train_label_ids,
         torch.tensor([10, 11, 12, 2]),
     )
-
     assert torch.equal(
         datapoint.attention_mask,
-        torch.ones(4, dtype=torch.long),
+        torch.tensor([1, 1, 1, 1]),
     )
-
     assert torch.equal(
         datapoint.eval_input_ids,
         torch.tensor([1, 10, 11, 12]),
@@ -61,17 +64,19 @@ def test_wikitext_transform_truncates_to_max_length():
 
     assert torch.equal(
         datapoint.train_input_ids,
-        torch.tensor([1, 10, 11]),
+        torch.tensor([1, 10]),
     )
-
     assert torch.equal(
         datapoint.train_label_ids,
-        torch.tensor([10, 11, 2]),
+        torch.tensor([10, 11]),
     )
-
     assert torch.equal(
         datapoint.attention_mask,
-        torch.ones(3, dtype=torch.long),
+        torch.tensor([1, 1]),
+    )
+    assert torch.equal(
+        datapoint.eval_input_ids,
+        torch.tensor([1, 10]),
     )
 
 
@@ -80,23 +85,3 @@ def test_wikitext_transform_rejects_small_max_length():
 
     with pytest.raises(ValueError, match="at least 2"):
         WikiTextTransform(tokenizer=tokenizer, max_length=1)
-
-
-def test_wikitext_transform_requires_bos_token():
-    tokenizer = FakeTokenizer()
-    tokenizer.bos_token_id = None
-
-    transform = WikiTextTransform(tokenizer=tokenizer)
-
-    with pytest.raises(ValueError, match="bos_token_id"):
-        transform({"text": "hello world"})
-
-
-def test_wikitext_transform_requires_eos_token():
-    tokenizer = FakeTokenizer()
-    tokenizer.eos_token_id = None
-
-    transform = WikiTextTransform(tokenizer=tokenizer)
-
-    with pytest.raises(ValueError, match="eos_token_id"):
-        transform({"text": "hello world"})
