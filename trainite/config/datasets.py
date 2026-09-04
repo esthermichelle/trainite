@@ -164,12 +164,8 @@ class WikiTextTransformConfig(TransformConfig):
 
 class WikiTextDatasetConfig(HuggingFaceDatasetConfig):
     path: Literal["Salesforce/wikitext"] = "Salesforce/wikitext"
-    name: Literal[
-        "wikitext-103-raw-v1",
-        "wikitext-103-v1",
-        "wikitext-2-raw-v1",
-        "wikitext-2-v1",
-    ] = "wikitext-2-raw-v1"
+    # https://huggingface.co/datasets/Salesforce/wikitext
+    name: str = "wikitext-2-raw-v1"
 
 
 class WikiTextDataConfig(DataConfigBase):
