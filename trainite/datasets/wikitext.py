@@ -69,8 +69,5 @@ class WikiTextTransform:
             train_input_ids=input_ids,
             train_label_ids=labels,
             attention_mask=train_attention_mask,
-            eval_input_ids=torch.tensor(
-                token_ids[:-1],
-                dtype=torch.long,
-            ),
+            eval_input_ids=input_ids,
         )
