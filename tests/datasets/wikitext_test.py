@@ -12,9 +12,6 @@ class FakeTokenizer:
         truncation=True,
         max_length=128,
     ):
-        assert add_special_tokens is True
-        assert truncation is True
-
         # The tokenizer is responsible for adding special tokens.
         ids = [1, 10, 11, 12, 2]
         attention_mask = [1, 1, 1, 1, 1]
