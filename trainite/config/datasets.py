@@ -137,10 +137,7 @@ class HuggingFaceDataConfig(DataWithAutoSplit):
 
 
 class WikiTextTransformConfig(TransformConfig):
-    target: Literal[
-        "trainite.datasets.wikitext.WikiTextTransform",
-        "dataset_impl.wikitext.WikiTextTransform",
-    ] = Field(
+    target: str = Field(
         default="trainite.datasets.wikitext.WikiTextTransform",
         alias="_target_",
     )
@@ -148,7 +145,7 @@ class WikiTextTransformConfig(TransformConfig):
 
 
 class WikiTextDatasetConfig(HuggingFaceDatasetConfig):
-    path: Literal["Salesforce/wikitext"] = "Salesforce/wikitext"
+    path: str = "Salesforce/wikitext"
     # https://huggingface.co/datasets/Salesforce/wikitext
     name: str = "wikitext-2-raw-v1"
 
