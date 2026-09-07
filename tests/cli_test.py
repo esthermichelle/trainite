@@ -4,12 +4,17 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from trainite.cli.init import Init, init_project
-import yaml
 
 import pytest
+import yaml
 
-from trainite.config.registry import MODEL_SPECS, DATASET_SPECS, PREPROCESSOR_SPECS, TRAINER_SPECS
+from trainite.cli.init import Init, init_project
+from trainite.config.registry import (
+    DATASET_SPECS,
+    MODEL_SPECS,
+    PREPROCESSOR_SPECS,
+    TRAINER_SPECS,
+)
 
 
 def get_valid_project_combinations():
@@ -34,6 +39,7 @@ def get_valid_project_combinations():
 def test_init_generates_valid_project(models: list[str], dataset: str, trainer: str) -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         project_dir = Path(temp_dir) / "demo-project"
+
         # Run trainite init
         cmd = [
             sys.executable,
@@ -71,15 +77,18 @@ def test_init_generates_valid_project(models: list[str], dataset: str, trainer: 
             "README.md",
             preprocessor_file,
         ]
+
         for filename in expected_files:
             if filename is not None:
                 assert (project_dir / filename).exists(), f"{filename} missing"
 
-        # Check that target inside config.yaml is rewritten correctly and points to primary model
+        # Check that target inside config.yaml is rewritten correctly
+        # and points to primary model
         with open(project_dir / "config.yaml", "r") as f:
             generated_config = yaml.safe_load(f)
+
         assert generated_config["project_name"] == project_dir.name
-        assert generated_config["output"]["run_name"] == f"{models[0]}__{dataset}".replace("-", "_")
+        assert generated_config["output"]["run_name"] == (f"{models[0]}__{dataset}".replace("-", "_"))
         assert generated_config["model"]["_target_"].startswith("models.")
         assert generated_config["model"]["collate_fn_target"].startswith("models.")
 
@@ -94,19 +103,36 @@ def test_init_generates_valid_project(models: list[str], dataset: str, trainer: 
             "main.py",
             preprocessor_file,
         ]
+
         for filename in python_files:
             if filename is not None:
                 py_compile.compile(str(project_dir / filename), doraise=True)
 
-        if dataset == "hugging-face":
-            assert generated_config["data"]["dataset"]["_target_"] == "datasets.load_dataset"
+        # Check dataset and transform targets
+        is_hf_backed = dataset_spec.builder_symbol == "datasets.load_dataset"
+
+        data_config = generated_config["data"]
+        split_configs = (
+            [data_config]
+            if "dataset" in data_config
+            else [data_config[split] for split in ("train", "val", "test") if data_config.get(split)]
+        )
+
+        for split_config in split_configs:
+            if is_hf_backed:
+                assert split_config["dataset"]["_target_"] == "datasets.load_dataset"
+            else:
+                assert split_config["dataset"]["_target_"].startswith("dataset_impl.")
+
+            assert split_config["transform"]["_target_"].startswith("dataset_impl.")
+
+        # Check Hugging Face-specific configuration
+        if is_hf_backed:
             assert generated_config["preprocessor"]["_target_"] == ("preprocessors.gpt2_tokenizer.load_gpt2_tokenizer")
+
             generated_pyproject = (project_dir / "pyproject.toml").read_text()
             assert "datasets" in generated_pyproject
             assert "transformers" in generated_pyproject
-        else:
-            assert generated_config["data"]["dataset"]["_target_"].startswith("dataset_impl.")
-        assert generated_config["data"]["transform"]["_target_"].startswith("dataset_impl.")
 
 
 @pytest.mark.integration
@@ -115,7 +141,11 @@ def test_generated_project_is_runnable() -> None:
     generate one representative project, install its own declared dependencies
     in an isolated uv environment, and run a minimal training workload.
     """
-    model, dataset, trainer = "rope-transformer", "string-reverse", "decoder-trainer"
+    model, dataset, trainer = (
+        "rope-transformer",
+        "string-reverse",
+        "decoder-trainer",
+    )
 
     with tempfile.TemporaryDirectory() as temp_dir:
         project_dir = Path(temp_dir) / "runnable-project"
@@ -199,15 +229,18 @@ def test_generated_project_is_runnable() -> None:
 
 
 def test_cli_main_routing(capsys):
-    from trainite.cli.main import main
     from unittest import mock
+
+    from trainite.cli.main import main
 
     with pytest.raises(SystemExit) as exc_info:
         main(argv=[])
+
     assert exc_info.value.code == 2
 
     main(argv=["--version"])
     output = capsys.readouterr()
+
     assert output.out.startswith("Trainite, https://github.com/pytorch-ignite/trainite/\nVersion: ")
 
     with mock.patch("trainite.cli.main.run_interactive_mode") as mock_interactive:
@@ -244,13 +277,15 @@ def test_import_without_dependencies() -> None:
         "import importlib, sys\n"
         "orig_import = importlib.import_module\n"
         "def my_import(name, package=None):\n"
-        "    if name in ('torch', 'ignite') or (package and package.startswith(('torch', 'ignite'))):\n"
+        "    if name in ('torch', 'ignite') or "
+        "(package and package.startswith(('torch', 'ignite'))):\n"
         "        raise ImportError(f'Mocked ImportError for {name}')\n"
         "    return orig_import(name, package)\n"
         "importlib.import_module = my_import\n"
         "import trainite\n"
         "import trainite.cli.main\n"
     )
+
     result = subprocess.run(
         [sys.executable, "-c", code],
         check=True,
@@ -258,6 +293,7 @@ def test_import_without_dependencies() -> None:
         capture_output=True,
         text=True,
     )
+
     assert "is not a Python type" not in result.stderr
 
 
@@ -272,6 +308,7 @@ def test_init_with_sky_flag(tmp_path):
     init_project(config)
 
     assert (project_dir / "sky.yaml").exists()
+
     sky_content = (project_dir / "sky.yaml").read_text()
     assert 'name: "sky-experiment"' in sky_content
     assert "uv sync" in sky_content
@@ -286,5 +323,6 @@ def test_init_without_sky_flag_default(tmp_path):
     init_project(config)
 
     assert not (project_dir / "sky.yaml").exists()
+
     pyproject_content = (project_dir / "pyproject.toml").read_text()
     assert "skypilot" not in pyproject_content
