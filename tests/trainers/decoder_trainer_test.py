@@ -187,9 +187,9 @@ def temp_run_dir():
 def project_config(temp_run_dir):
     return ProjectConfig(
         project_name="test_project",
-        preprocessor=cc("tests.trainers.decoder_trainer_test.DummyTokenizer"),
+        preprocessor=cc(f"{__name__}.DummyTokenizer"),
         model=cc(
-            "tests.trainers.decoder_trainer_test.SimpleModel",
+            f"{__name__}.SimpleModel",
             vocab_size=10,
             hidden_size=8,
         ),
@@ -197,7 +197,7 @@ def project_config(temp_run_dir):
         data=DataConfigBase(
             train=SplitConfig(
                 dataset=cc(
-                    "tests.trainers.decoder_trainer_test.SimpleDataset",
+                    f"{__name__}.SimpleDataset",
                     size=16,
                     seq_len=4,
                     vocab_size=10,
@@ -206,7 +206,7 @@ def project_config(temp_run_dir):
             ),
             val=SplitConfig(
                 dataset=cc(
-                    "tests.trainers.decoder_trainer_test.SimpleDataset",
+                    f"{__name__}.SimpleDataset",
                     size=8,
                     seq_len=4,
                     vocab_size=10,
@@ -350,7 +350,7 @@ def test_decoder_trainer_test_method(project_config, temp_run_dir):
     # Add test split to config
     project_config.data.test = SplitConfig(
         dataset=cc(
-            "tests.trainers.decoder_trainer_test.SimpleDataset",
+            f"{__name__}.SimpleDataset",
             size=4,
             seq_len=4,
             vocab_size=10,
@@ -371,7 +371,7 @@ def test_decoder_trainer_test_loads_best_checkpoint(project_config, temp_run_dir
     # Add test split
     project_config.data.test = SplitConfig(
         dataset=cc(
-            "tests.trainers.decoder_trainer_test.SimpleDataset",
+            f"{__name__}.SimpleDataset",
             size=4,
             seq_len=4,
             vocab_size=10,
@@ -393,7 +393,7 @@ def test_decoder_trainer_test_loads_best_checkpoint(project_config, temp_run_dir
 
 
 def test_decoder_trainer_dataloader_collate_fn(project_config):
-    project_config.model.collate_fn_target = "tests.trainers.decoder_trainer_test.dummy_collate_fn"
+    project_config.model.collate_fn_target = f"{__name__}.dummy_collate_fn"
     trainer = create_trainer_from_config(project_config)
     assert trainer.train_loader is not None
     assert trainer.train_loader.collate_fn is dummy_collate_fn
@@ -410,15 +410,15 @@ def test_decoder_trainer_explicit_split_shuffle(project_config):
 def test_decoder_trainer_builds_train_and_val_loaders_from_ratios(tmp_path):
     config = ProjectConfig(
         project_name="test_project",
-        preprocessor=cc("tests.trainers.decoder_trainer_test.DummyTokenizer"),
+        preprocessor=cc(f"{__name__}.DummyTokenizer"),
         model=cc(
-            "tests.trainers.decoder_trainer_test.SimpleModel",
+            f"{__name__}.SimpleModel",
             vocab_size=100,
             hidden_size=32,
         ),
         data=DataWithAutoSplit(
             dataset=cc(
-                "tests.trainers.decoder_trainer_test.SimpleDataset",
+                f"{__name__}.SimpleDataset",
                 size=100,
                 seq_len=10,
                 vocab_size=100,
@@ -444,15 +444,15 @@ def test_decoder_trainer_builds_train_and_val_loaders_from_ratios(tmp_path):
 def test_decoder_trainer_builds_train_val_and_test_loaders_from_ratios(tmp_path):
     config = ProjectConfig(
         project_name="test_project",
-        preprocessor=cc("tests.trainers.decoder_trainer_test.DummyTokenizer"),
+        preprocessor=cc(f"{__name__}.DummyTokenizer"),
         model=cc(
-            "tests.trainers.decoder_trainer_test.SimpleModel",
+            f"{__name__}.SimpleModel",
             vocab_size=100,
             hidden_size=32,
         ),
         data=DataWithAutoSplit(
             dataset=cc(
-                "tests.trainers.decoder_trainer_test.SimpleDataset",
+                f"{__name__}.SimpleDataset",
                 size=100,
                 seq_len=10,
                 vocab_size=100,
@@ -486,7 +486,7 @@ def test_decoder_trainer_builds_train_val_and_test_loaders_from_ratios(tmp_path)
 def test_decoder_trainer_dataset_is_empty(project_config):
     project_config.data = DataWithAutoSplit(
         dataset=cc(
-            "tests.trainers.decoder_trainer_test.EmptyDataset",
+            f"{__name__}.EmptyDataset",
         ),
         test_ratio=0.0,
         val_ratio=0.2,
@@ -526,10 +526,10 @@ def test_decoder_trainer_early_stopping_patience(project_config):
 
 def test_decoder_trainer_dataloader_class_collate_fn(project_config):
     project_config.model = cc(
-        "tests.trainers.decoder_trainer_test.SimpleModel",
+        f"{__name__}.SimpleModel",
         vocab_size=10,
         hidden_size=8,
-        collate_fn_target="tests.trainers.decoder_trainer_test.DummyClassCollateFn",
+        collate_fn_target=f"{__name__}.DummyClassCollateFn",
     )
     trainer = create_trainer_from_config(project_config)
     assert trainer.train_loader is not None
@@ -561,21 +561,21 @@ def test_setup_inference_and_log_success(project_config, temp_run_dir):
     project_config.trainer.inference_every_epochs = 1
     project_config.trainer.max_inference_new_tokens = 32
     project_config.model = cc(
-        "tests.trainers.decoder_trainer_test.GenerativeModel",
+        f"{__name__}.GenerativeModel",
         vocab_size=10,
         hidden_size=8,
         collate_fn_target="trainite.models.rope_transformer.CausalLMCollateFn",
     )
-    transform = cc("tests.trainers.decoder_trainer_test.DummyTransform")
+    transform = cc(f"{__name__}.DummyTransform")
     project_config.data.train.dataset = cc(
-        "tests.trainers.decoder_trainer_test.GenerativeDataset",
+        f"{__name__}.GenerativeDataset",
         size=16,
         seq_len=4,
         vocab_size=10,
     )
     project_config.data.train.transform = transform
     project_config.data.val.dataset = cc(
-        "tests.trainers.decoder_trainer_test.GenerativeDataset",
+        f"{__name__}.GenerativeDataset",
         size=8,
         seq_len=4,
         vocab_size=10,
