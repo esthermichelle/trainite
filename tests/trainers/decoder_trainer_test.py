@@ -210,7 +210,7 @@ def project_config(temp_run_dir):
                     seq_len=4,
                     vocab_size=10,
                 ),
-                dataloader=DataLoaderConfig(batch_size=4),
+                dataloader=DataLoaderConfig(batch_size=4, num_workers=0),
             ),
             val=SplitConfig(
                 dataset=cc(
@@ -219,7 +219,7 @@ def project_config(temp_run_dir):
                     seq_len=4,
                     vocab_size=10,
                 ),
-                dataloader=DataLoaderConfig(batch_size=4),
+                dataloader=DataLoaderConfig(batch_size=4, num_workers=0),
             ),
         ),
         trainer=TrainerConfig(
@@ -363,7 +363,7 @@ def test_decoder_trainer_test_method(project_config, temp_run_dir):
             seq_len=4,
             vocab_size=10,
         ),
-        dataloader=DataLoaderConfig(batch_size=4),
+        dataloader=DataLoaderConfig(batch_size=4, num_workers=0),
     )
 
     trainer = create_trainer_from_config(project_config)
@@ -384,7 +384,7 @@ def test_decoder_trainer_test_loads_best_checkpoint(project_config, temp_run_dir
             seq_len=4,
             vocab_size=10,
         ),
-        dataloader=DataLoaderConfig(batch_size=4),
+        dataloader=DataLoaderConfig(batch_size=4, num_workers=0),
     )
 
     trainer = create_trainer_from_config(project_config)

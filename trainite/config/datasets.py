@@ -1,13 +1,17 @@
-from typing import Literal, Self
+from typing import Self
 from pydantic import Field, model_validator
-from trainite.config.base import DatasetConfig, TransformConfig, DataWithAutoSplit, DataLoaderConfig
+from trainite.config.base import (
+    DatasetConfig,
+    TransformConfig,
+    DataWithAutoSplit,
+    DataLoaderConfig,
+    DataConfigBase,
+    SplitConfig,
+)
 
 
 class PromptCompletionTransformConfig(TransformConfig):
-    target: Literal[
-        "trainite.datasets.string_reverse.PromptCompletionTransform",
-        "dataset_impl.string_reverse.PromptCompletionTransform",
-    ] = Field(
+    target: str = Field(
         default="trainite.datasets.string_reverse.PromptCompletionTransform",
         alias="_target_",
     )
@@ -15,10 +19,7 @@ class PromptCompletionTransformConfig(TransformConfig):
 
 
 class StringReverseDatasetConfig(DatasetConfig):
-    target: Literal[
-        "trainite.datasets.string_reverse.StringReverseDataset",
-        "dataset_impl.string_reverse.StringReverseDataset",
-    ] = Field(
+    target: str = Field(
         default="trainite.datasets.string_reverse.StringReverseDataset",
         alias="_target_",
     )
@@ -58,10 +59,7 @@ class StringReverseDataConfig(DataWithAutoSplit):
 
 
 class CountingTransformConfig(TransformConfig):
-    target: Literal[
-        "trainite.datasets.counting.CountingTransform",
-        "dataset_impl.counting.CountingTransform",
-    ] = Field(
+    target: str = Field(
         default="trainite.datasets.counting.CountingTransform",
         alias="_target_",
     )
@@ -69,10 +67,7 @@ class CountingTransformConfig(TransformConfig):
 
 
 class CountingDatasetConfig(DatasetConfig):
-    target: Literal[
-        "trainite.datasets.counting.CountingDataset",
-        "dataset_impl.counting.CountingDataset",
-    ] = Field(
+    target: str = Field(
         default="trainite.datasets.counting.CountingDataset",
         alias="_target_",
     )
@@ -112,10 +107,7 @@ class CountingDataConfig(DataWithAutoSplit):
 
 
 class HuggingFaceTransformConfig(TransformConfig):
-    target: Literal[
-        "trainite.datasets.hugging_face.HuggingFaceTransform",
-        "dataset_impl.hugging_face.HuggingFaceTransform",
-    ] = Field(
+    target: str = Field(
         default="trainite.datasets.hugging_face.HuggingFaceTransform",
         alias="_target_",
     )
@@ -124,7 +116,7 @@ class HuggingFaceTransformConfig(TransformConfig):
 
 
 class HuggingFaceDatasetConfig(DatasetConfig):
-    target: Literal["datasets.load_dataset"] = Field(default="datasets.load_dataset", alias="_target_")
+    target: str = Field(default="datasets.load_dataset", alias="_target_")
     path: str = Field(default="namespace/dataset-name", min_length=1)
     name: str | None = None
     split: str = Field(default="train", min_length=1)
@@ -140,5 +132,60 @@ class HuggingFaceDataConfig(DataWithAutoSplit):
         default_factory=lambda: DataLoaderConfig(
             batch_size=32,
             shuffle=True,
+        )
+    )
+
+
+class WikiTextTransformConfig(TransformConfig):
+    target: str = Field(
+        default="trainite.datasets.wikitext.WikiTextTransform",
+        alias="_target_",
+    )
+    max_length: int = Field(default=128, gt=1)
+
+
+class WikiTextDatasetConfig(HuggingFaceDatasetConfig):
+    path: str = "Salesforce/wikitext"
+    # https://huggingface.co/datasets/Salesforce/wikitext
+    name: str = "wikitext-2-raw-v1"
+
+
+class WikiTextDataConfig(DataConfigBase):
+    train: SplitConfig = Field(
+        default_factory=lambda: SplitConfig(
+            dataset=WikiTextDatasetConfig(
+                split="train",
+            ),
+            transform=WikiTextTransformConfig(),
+            dataloader=DataLoaderConfig(
+                batch_size=32,
+                shuffle=True,
+            ),
+        )
+    )
+
+    val: SplitConfig = Field(
+        default_factory=lambda: SplitConfig(
+            dataset=WikiTextDatasetConfig(
+                split="validation",
+            ),
+            transform=WikiTextTransformConfig(),
+            dataloader=DataLoaderConfig(
+                batch_size=32,
+                shuffle=False,
+            ),
+        )
+    )
+
+    test: SplitConfig = Field(
+        default_factory=lambda: SplitConfig(
+            dataset=WikiTextDatasetConfig(
+                split="test",
+            ),
+            transform=WikiTextTransformConfig(),
+            dataloader=DataLoaderConfig(
+                batch_size=32,
+                shuffle=False,
+            ),
         )
     )

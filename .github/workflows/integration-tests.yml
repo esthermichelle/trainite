@@ -1,4 +1,4 @@
-name: cpu tests
+name: integration tests
 
 on:
   push:
@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  pytest:
+  integration-tests:
     strategy:
       fail-fast: false
       matrix:
@@ -30,7 +30,6 @@ jobs:
     name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,8 +40,5 @@ jobs:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
 
-      - name: Sync dependencies
-        run: uv sync --locked --dev
-
-      - name: Run tests
-        run: uv run pytest
+      - name: Run integration tests
+        run: uv run --with pytest pytest -o addopts="" -m integration tests/cli_test.py
