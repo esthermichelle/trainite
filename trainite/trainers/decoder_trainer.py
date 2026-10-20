@@ -120,6 +120,8 @@ class Trainer:
         self.max_inference_new_tokens = self.trainer_config.max_inference_new_tokens
         self.criterion = instantiate(config.loss)
         self.ignore_index: int = getattr(self.criterion, "ignore_index", -100)
+        self.requires_router_info = getattr(self.criterion, "requires_router_info", False)
+        self.train_forward_kwargs = {"return_router_info": True} if self.requires_router_info else {}
 
         # Prepare components for distributed execution and mixed precision
         self.model, self.optimizer, self.train_loader, self.val_loader, self.test_loader = self.accelerator.prepare(
@@ -250,8 +252,9 @@ class Trainer:
             attention_mask = attention_mask.to(self.device)
 
         self.optimizer.zero_grad(set_to_none=True)
-        logits = self.model(inputs, attention_mask=attention_mask)
-        loss = self.criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
+        outputs = self.model(inputs, attention_mask=attention_mask, **self.train_forward_kwargs)
+        logits = outputs if isinstance(outputs, torch.Tensor) else outputs[0]
+        loss = self.criterion(outputs, targets)
 
         self.accelerator.backward(loss)
 
@@ -389,13 +392,15 @@ class Trainer:
         def transform_fn(output):
             return _flatten(output, ignore_index=self.ignore_index)
 
+        # Evaluate language modeling with cross-entropy; router balancing is a training regularizer.
+        eval_criterion = self.criterion.cross_entropy if self.requires_router_info else self.criterion
         metrics = {}
         for prefix, evaluator in [
             ("train", self.train_evaluator),
             ("val", self.val_evaluator),
             ("test", self.test_evaluator),
         ]:
-            loss = Loss(self.criterion, output_transform=transform_fn, device=self.device)
+            loss = Loss(eval_criterion, output_transform=transform_fn, device=self.device)
             token_acc = Accuracy(output_transform=transform_fn, device=self.device)
 
             loss.attach(evaluator, "loss")
