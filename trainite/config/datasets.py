@@ -263,6 +263,7 @@ class ArithmeticAdditionDatasetConfig(DatasetConfig):
     min_digits: int = Field(default=2, gt=0)
     max_digits: int = Field(default=4, gt=0)
     seed: int = 42
+    split: str = Field(default="train", pattern="^(train|val)$")
 
     @model_validator(mode="after")
     def validate_digit_range(self) -> Self:
@@ -277,6 +278,7 @@ class ArithmeticAdditionDataConfig(DataConfigBase):
             dataset=ArithmeticAdditionDatasetConfig(
                 size=1000,
                 seed=42,
+                split="train",
             ),
             transform=PromptCompletionTransformConfig(),
             dataloader=DataLoaderConfig(
@@ -291,6 +293,7 @@ class ArithmeticAdditionDataConfig(DataConfigBase):
             dataset=ArithmeticAdditionDatasetConfig(
                 size=200,
                 seed=43,
+                split="val",
             ),
             transform=PromptCompletionTransformConfig(),
             dataloader=DataLoaderConfig(
