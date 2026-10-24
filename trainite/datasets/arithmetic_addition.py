@@ -1,4 +1,4 @@
-"""Synthetic dataset for character-level arithmetic addition."""
+﻿"""Synthetic dataset for character-level arithmetic addition."""
 
 import random
 
@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 
 
 class ArithmeticAdditionDataset(Dataset):
-    """Generate addition problems with configurable operand lengths.
+    """Generate unique addition problems with configurable operand lengths.
 
     Each sample has:
         source: "123+456"
@@ -25,6 +25,15 @@ class ArithmeticAdditionDataset(Dataset):
         if min_digits <= 0 or max_digits < min_digits:
             raise ValueError("Invalid operand digit range")
 
+        possible_values = sum(
+            9 * 10 ** (digits - 1)
+            for digits in range(min_digits, max_digits + 1)
+        )
+        if size > possible_values**2:
+            raise ValueError(
+                "Requested size exceeds the number of unique ordered pairs"
+            )
+
         self.size = size
         self.min_digits = min_digits
         self.max_digits = max_digits
@@ -32,17 +41,23 @@ class ArithmeticAdditionDataset(Dataset):
 
         rng = random.Random(seed)
         self.samples = []
+        seen_sources = set()
 
-        for _ in range(size):
+        while len(self.samples) < size:
             digits_a = rng.randint(min_digits, max_digits)
             digits_b = rng.randint(min_digits, max_digits)
 
             a = rng.randint(10 ** (digits_a - 1), 10**digits_a - 1)
             b = rng.randint(10 ** (digits_b - 1), 10**digits_b - 1)
+            source = f"{a}+{b}"
 
+            if source in seen_sources:
+                continue
+
+            seen_sources.add(source)
             self.samples.append(
                 {
-                    "source": f"{a}+{b}",
+                    "source": source,
                     "target": str(a + b),
                 }
             )

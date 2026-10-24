@@ -272,4 +272,30 @@ class ArithmeticAdditionDatasetConfig(DatasetConfig):
 
 
 class ArithmeticAdditionDataConfig(DataConfigBase):
-    pass
+    train: SplitConfig = Field(
+        default_factory=lambda: SplitConfig(
+            dataset=ArithmeticAdditionDatasetConfig(
+                size=1000,
+                seed=42,
+            ),
+            transform=PromptCompletionTransformConfig(),
+            dataloader=DataLoaderConfig(
+                batch_size=32,
+                shuffle=True,
+            ),
+        )
+    )
+
+    val: SplitConfig = Field(
+        default_factory=lambda: SplitConfig(
+            dataset=ArithmeticAdditionDatasetConfig(
+                size=200,
+                seed=43,
+            ),
+            transform=PromptCompletionTransformConfig(),
+            dataloader=DataLoaderConfig(
+                batch_size=32,
+                shuffle=False,
+            ),
+        )
+    )
