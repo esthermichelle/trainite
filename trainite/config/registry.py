@@ -121,6 +121,21 @@ DATASET_SPECS = {
         preprocessor_spec_name="gpt2",
         dependencies=["datasets"],
     ),
+    "arithmetic-addition": DatasetSpec(
+        name="arithmetic_addition",
+        implementation_path=Path(
+            "trainite/datasets/arithmetic_addition.py"
+        ),
+        config_cls_path=(
+            "trainite.config.datasets.ArithmeticAdditionDataConfig"
+        ),
+        dataset_config_cls_path=(
+            "trainite.config.datasets.ArithmeticAdditionDatasetConfig"
+        ),
+        implementation_symbol="ArithmeticAdditionDataset",
+        builder_symbol="ArithmeticAdditionDataset",
+        preprocessor_spec_name="char",
+    ),
 }
 
 TRAINER_SPECS = {

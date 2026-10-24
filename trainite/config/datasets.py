@@ -252,3 +252,24 @@ class PythonEduDataConfig(DataWithAutoSplit):
     test_ratio: float = 0.1
     val_ratio: float = 0.1
     dataloader: DataLoaderConfig = Field(default_factory=lambda: DataLoaderConfig(batch_size=32, shuffle=True))
+
+
+class ArithmeticAdditionDatasetConfig(DatasetConfig):
+    target: str = Field(
+        default="trainite.datasets.arithmetic_addition.ArithmeticAdditionDataset",
+        alias="_target_",
+    )
+    size: int = Field(default=1000, gt=0)
+    min_digits: int = Field(default=2, gt=0)
+    max_digits: int = Field(default=4, gt=0)
+    seed: int = 42
+
+    @model_validator(mode="after")
+    def validate_digit_range(self) -> Self:
+        if self.min_digits > self.max_digits:
+            raise ValueError("min_digits must be <= max_digits")
+        return self
+
+
+class ArithmeticAdditionDataConfig(DataConfigBase):
+    pass
