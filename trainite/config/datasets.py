@@ -259,11 +259,13 @@ class ArithmeticAdditionDatasetConfig(DatasetConfig):
         default="trainite.datasets.arithmetic_addition.ArithmeticAdditionDataset",
         alias="_target_",
     )
-    size: int = Field(default=1000, gt=0)
+    size: int | None = Field(default=None, gt=0)
     min_digits: int = Field(default=2, gt=0)
     max_digits: int = Field(default=4, gt=0)
     seed: int = 42
-    split: str = Field(default="train", pattern="^(train|val)$")
+    split: str = Field(default="train", pattern="^(train|val|test)$")
+    train_size: int = Field(default=10000, gt=0)
+    val_size: int = Field(default=1000, gt=0)
 
     @model_validator(mode="after")
     def validate_digit_range(self) -> Self:
@@ -271,12 +273,19 @@ class ArithmeticAdditionDatasetConfig(DatasetConfig):
             raise ValueError("min_digits must be <= max_digits")
         return self
 
+    @model_validator(mode="after")
+    def validate_size_matches_split(self) -> Self:
+        expected = {"train": self.train_size, "val": self.val_size}.get(self.split)
+        if expected is not None and self.size is not None and self.size != expected:
+            raise ValueError(f"size must be {expected} for split={self.split!r}")
+        return self
+
 
 class ArithmeticAdditionDataConfig(DataConfigBase):
     train: SplitConfig = Field(
         default_factory=lambda: SplitConfig(
             dataset=ArithmeticAdditionDatasetConfig(
-                size=1000,
+                size=10000,
                 seed=42,
                 split="train",
             ),
@@ -291,13 +300,30 @@ class ArithmeticAdditionDataConfig(DataConfigBase):
     val: SplitConfig = Field(
         default_factory=lambda: SplitConfig(
             dataset=ArithmeticAdditionDatasetConfig(
-                size=200,
-                seed=43,
+                size=1000,
+                seed=42,
                 split="val",
             ),
             transform=PromptCompletionTransformConfig(),
             dataloader=DataLoaderConfig(
                 batch_size=32,
+                shuffle=False,
+            ),
+        )
+    )
+
+    test: SplitConfig = Field(
+        default_factory=lambda: SplitConfig(
+            dataset=ArithmeticAdditionDatasetConfig(
+                size=1000,
+                min_digits=5,
+                max_digits=5,
+                seed=200,
+                split="test",
+            ),
+            transform=PromptCompletionTransformConfig(),
+            dataloader=DataLoaderConfig(
+                batch_size=128,
                 shuffle=False,
             ),
         )

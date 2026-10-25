@@ -1,0 +1,171 @@
+import string
+import torch
+
+
+CHARSET_PRESETS = {
+    "@universal": string.ascii_letters + string.digits + string.punctuation + " ",
+    "@alpha": string.ascii_letters,
+    "@alpha_lowercase": string.ascii_lowercase,
+    "@alpha_uppercase": string.ascii_uppercase,
+    "@digits": string.digits,
+    "@alphanumeric": string.ascii_letters + string.digits,
+    "@punctuation": string.punctuation,
+    "@alphanumeric_lowercase": string.ascii_lowercase + string.digits,
+    "@alphanumeric_uppercase": string.ascii_uppercase + string.digits,
+}
+
+
+class CharTokenizer:
+    """A simple character-level tokenizer with a hardcoded universal vocabulary.
+    Consists of all printable ASCII characters, plus special tokens for padding, beginning of sequence, separator, end of sequence, and unknown characters.
+
+    The vocabulary can be a charset preset such as ``@alphanumeric`` or a literal string.
+    ID 0 is reserved as the <PAD> token.
+    ID 1 is reserved as the <BOS> token.
+    ID 2 is reserved as the <SEP> token.
+    ID 3 is reserved as the <EOS> token.
+    ID 4 is reserved as the <UNK> token.
+    """
+
+    def __init__(self, charset: str = "@universal") -> None:
+        if charset in CHARSET_PRESETS:
+            chars = CHARSET_PRESETS[charset]
+        elif charset.startswith("@"):
+            raise ValueError(f"Unknown charset preset: {charset}")
+        else:
+            chars = charset
+
+        if not chars:
+            raise ValueError("Charset cannot be empty.")
+        if len(set(chars)) != len(chars):
+            raise ValueError("Charset must not contain duplicate characters.")
+
+        self.chars = chars
+        self.pad_token_id = 0
+        self.bos_token_id = 1
+        self.sep_token_id = 2
+        self.eos_token_id = 3
+        self.unk_token_id = 4
+
+        self.char_to_id: dict[str, int] = {c: i + 5 for i, c in enumerate(self.chars)}
+        self.id_to_char: dict[int, str] = {i + 5: c for i, c in enumerate(self.chars)}
+
+        self.special_tokens: dict[int, str] = {
+            self.pad_token_id: "<PAD>",
+            self.bos_token_id: "<BOS>",
+            self.sep_token_id: "<SEP>",
+            self.eos_token_id: "<EOS>",
+            self.unk_token_id: "<UNK>",
+        }
+
+        for k, v in self.special_tokens.items():
+            self.id_to_char[k] = v
+
+    @property
+    def vocab_size(self) -> int:
+        """Number of unique tokens in the vocabulary (includes special tokens)."""
+        return len(self.chars) + len(self.special_tokens)
+
+    def encode(self, text: str) -> list[int]:
+        """Convert a string to a list of token IDs, mapping unrecognized characters to UNK."""
+        return [self.char_to_id.get(c, self.unk_token_id) for c in text]
+
+    def decode(
+        self,
+        ids: list[int] | torch.Tensor,
+        skip_special_tokens: bool = True,
+        ignore_index: int = -100,
+    ) -> str:
+        """Convert a list of token IDs back to a string.
+
+        Args:
+            ids: List or tensor of token IDs to decode.
+            skip_special_tokens: If True, skips printing special tokens like <bos> and <eos>.
+            ignore_index: The token ID used for loss masking. These are silently ignored.
+        """
+        if isinstance(ids, torch.Tensor):
+            ids = ids.tolist()
+
+        decoded_chars = []
+        for i in ids:
+            if i == ignore_index:
+                continue
+            if i in self.special_tokens:
+                if not skip_special_tokens or i == self.unk_token_id:
+                    decoded_chars.append(self.special_tokens[i])
+            elif i in self.id_to_char:
+                decoded_chars.append(self.id_to_char[i])
+            else:
+                decoded_chars.append(self.special_tokens[self.unk_token_id])
+        return "".join(decoded_chars)
+
+    def __call__(
+        self,
+        text: str | list[str],
+        padding: bool | str = False,
+        truncation: bool = False,
+        max_length: int | None = None,
+        return_tensors: str | None = None,
+        add_special_tokens: bool = True,
+    ) -> dict[str, torch.Tensor | list[list[int]]]:
+        if isinstance(text, str):
+            is_batched = False
+            texts = [text]
+        else:
+            is_batched = True
+            texts = text
+
+        batch_input_ids = []
+        batch_attention_mask = []
+
+        for t in texts:
+            ids = self.encode(t)
+            if truncation and max_length is not None:
+                num_special = 2 if add_special_tokens else 0
+                if max_length < num_special or max_length <= 0:
+                    raise ValueError(
+                        f"max_length ({max_length}) must be at least {num_special if add_special_tokens else 1} "
+                        f"when truncation=True and add_special_tokens={add_special_tokens}."
+                    )
+
+                keep = max_length - num_special
+                ids = ids[:keep]
+
+            if add_special_tokens:
+                ids = [self.bos_token_id] + ids + [self.eos_token_id]
+
+            batch_input_ids.append(ids)
+            batch_attention_mask.append([1] * len(ids))
+
+        if padding:
+            if padding == "max_length" and max_length is not None:
+                target_len = max_length
+            else:
+                target_len = max(len(ids) for ids in batch_input_ids)
+
+            for i in range(len(batch_input_ids)):
+                current_len = len(batch_input_ids[i])
+                if current_len < target_len:
+                    pad_len = target_len - current_len
+                    batch_input_ids[i] = [self.pad_token_id] * pad_len + batch_input_ids[i]
+                    batch_attention_mask[i] = [0] * pad_len + batch_attention_mask[i]
+
+        if not is_batched:
+            out = {
+                "input_ids": batch_input_ids[0],
+                "attention_mask": batch_attention_mask[0],
+            }
+        else:
+            out = {
+                "input_ids": batch_input_ids,
+                "attention_mask": batch_attention_mask,
+            }
+
+        if return_tensors == "pt":
+            tensor_out = {
+                "input_ids": torch.tensor(batch_input_ids, dtype=torch.long),
+                "attention_mask": torch.tensor(batch_attention_mask, dtype=torch.long),
+            }
+            return tensor_out
+
+        return out
