@@ -1,0 +1,99 @@
+project_name: arithmetic-addition-abacus-looped
+
+preprocessor:
+  _target_: trainite.preprocessors.char_tokenizer.CharTokenizer
+  charset: "0123456789+"
+
+model:
+  _target_: models.abacus_transformer.AbacusTransformerModel
+  collate_fn_target: trainite.models.rope_transformer.CausalLMCollateFn
+  hidden_size: 128
+  token_embed_dim: 96
+  abacus_dim: 32
+  num_cyclic_positions: 6   # >= longest trained digit span (max_digits=4 -> result up to 5 columns); wraps cyclically beyond
+  digit_token_start: 5      # CharTokenizer with charset "0123456789+": digits are ids 5..14
+  num_digit_tokens: 10
+  num_loops: 4              # looped transformer: inner stack reused num_loops times (effective depth 3x4=12)
+  num_layers: 3
+  num_heads: 4
+  feedforward_dim: 512
+  dropout: 0.0
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 0.001
+
+loss:
+  _target_: models.abacus_transformer.CausalLMCrossEntropyLoss
+  ignore_index: -100
+
+data:
+  train:
+    dataset:
+      _target_: dataset_impl.arithmetic_addition.ArithmeticAdditionDataset
+      size: 50000
+      train_size: 50000
+      val_size: 1000
+      min_digits: 2
+      max_digits: 4
+      seed: 42
+      split: train
+    transform:
+      _target_: trainite.datasets.string_reverse.PromptCompletionTransform
+      ignore_index: -100
+    dataloader:
+      batch_size: 128
+      shuffle: true
+      num_workers: 0
+
+  val:
+    dataset:
+      _target_: dataset_impl.arithmetic_addition.ArithmeticAdditionDataset
+      size: 1000
+      train_size: 50000
+      val_size: 1000
+      min_digits: 2
+      max_digits: 4
+      seed: 42
+      split: val
+    transform:
+      _target_: trainite.datasets.string_reverse.PromptCompletionTransform
+      ignore_index: -100
+    dataloader:
+      batch_size: 128
+      shuffle: false
+      num_workers: 0
+
+  test:
+    dataset:
+      _target_: dataset_impl.arithmetic_addition.ArithmeticAdditionDataset
+      size: 1000
+      # OOD probe: held-out digit length, same as the baseline experiment
+      min_digits: 5
+      max_digits: 5
+      seed: 200
+      split: test
+    transform:
+      _target_: trainite.datasets.string_reverse.PromptCompletionTransform
+      ignore_index: -100
+    dataloader:
+      batch_size: 128
+      shuffle: false
+      num_workers: 0
+
+trainer:
+  epochs: 300
+  log_every_steps: 200
+  early_stopping_patience: null
+  inference_every_epochs: 100
+  inference_num_samples: 5
+  max_inference_new_tokens: 16
+  grad_clip_norm: 1.0
+
+output:
+  root: outputs
+  run_name: arithmetic_addition_abacus_looped
+
+logger: tensorboard
+seed: 42
+device: null
