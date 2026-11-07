@@ -1,23 +1,32 @@
-"""Decoder-only Transformer with Abacus embeddings.
+"""Decoder-only Transformer with sinusoidal Abacus embeddings.
 
 Reference: "Transformers Can Do Arithmetic with the Right Embeddings"
 (McLeish et al., 2024). https://arxiv.org/abs/2405.17399
 
-This file follows the paper's official implementation
-(https://github.com/mcleish7/arithmetic, ``abacus.py`` and
-``cramming/architectures/embeddings.py``) rather than the earlier fixed
-sinusoidal / cyclic variant:
+The paper uses a *learned* embedding table indexed by digit column.  Because
+that table is an absolute positional embedding, it cannot generalize to column
+indices unseen during training: with 2-6 digit operands (max answer length 7)
+the row for column 8 is never trained, which produces a sharp accuracy cliff at
+8-digit operands.
 
-1. **Learned Abacus embeddings.**  Every digit token receives the same learned
-   positional embedding as other digits of the same significance.  Positions
-   are consecutive indices relative to the *start of the number* (the units
-   digit, because the data is LSB-first).  All non-digit tokens use one shared
-   learned slot (index 0).
+This implementation keeps the Abacus *column id* (position relative to the
+start of each number, units digit first because the data is LSB-first) but
+replaces the learned lookup with a deterministic sinusoidal function of the
+column index.  Every column, seen or unseen, therefore receives a unique and
+smoothly related vector, so digit alignment can generalize beyond the training
+length.  A small learned linear projection mixes the fixed Fourier basis, and a
+single learned vector represents all non-digit tokens:
 
-2. **Random training offset.**  During training the paper samples a single
-   offset ``k ~ U[0, max_offset]`` per batch and adds it to every digit
-   position.  This exposes the model to a wide range of positional embeddings
-   even though training sequences are short.  At inference the offset is 0.
+1. **Sinusoidal column encoding.**  ``[sin(c * f), cos(c * f)]`` for the same
+   frequencies as the classic Transformer, where ``c`` is the one-based column
+   id and ``f`` is a fixed geometric frequency band.  The result is projected
+   to the model width.  Non-digit tokens use one shared learned vector.
+
+2. **Random training offset.**  As in the paper, a single offset
+   ``k ~ U[0, max_offset]`` is sampled per batch and added to every digit
+   column during training; inference uses ``k = 0``.  With a functional
+   encoding the offset is a phase shift rather than a table lookup, so it is
+   handled naturally and cannot create untrained rows.
 
 3. **Addition, not concatenation.**  The Abacus embedding is added to the token
    embedding, using the same width as the baseline's hidden size.
@@ -86,11 +95,13 @@ def compute_column_ids(
 
 
 class AbacusEmbedding(nn.Module):
-    """Learned embedding table indexed by digit column.
+    """Sinusoidal (functional) encoding indexed by digit column.
 
-    Row 0 is the shared non-digit slot.  Rows 1.. are digit columns relative to
-    the start of the number.  The table is large enough to hold the longest
-    sequence plus the maximum random training offset.
+    Unlike the paper's learned table, the digit-column embedding is a fixed
+    Fourier basis evaluated at the column index, so columns never seen during
+    training still receive a well-defined, smoothly related vector.  A learned
+    projection mixes the basis, and one learned vector is shared by all
+    non-digit tokens (BOS, ``+``, ``=``, EOS, padding).
     """
 
     def __init__(
@@ -104,6 +115,8 @@ class AbacusEmbedding(nn.Module):
         super().__init__()
         if embedding_dim <= 0:
             raise ValueError("embedding_dim must be positive")
+        if embedding_dim % 2 != 0:
+            raise ValueError("embedding_dim must be even for sinusoidal Abacus encoding")
         if max_seq_len <= 0:
             raise ValueError("max_seq_len must be positive")
         if max_offset < 0:
@@ -111,7 +124,18 @@ class AbacusEmbedding(nn.Module):
         if num_digit_tokens <= 0 or digit_token_start < 0:
             raise ValueError("num_digit_tokens must be positive and digit_token_start non-negative")
 
-        self.embedding = nn.Embedding(max_seq_len, embedding_dim)
+        half = embedding_dim // 2
+        # Same geometric frequency bands as the classic sinusoidal encoding.
+        freqs = torch.exp(-math.log(10000.0) * torch.arange(half, dtype=torch.float32) / half)
+        self.register_buffer("freqs", freqs, persistent=False)
+        # Learned mixing of the fixed basis; keeps the encoding full-rank.
+        self.proj = nn.Linear(embedding_dim, embedding_dim, bias=False)
+        # Shared learned vector for every non-digit token (column id 0).
+        self.non_digit = nn.Parameter(torch.zeros(embedding_dim))
+
+        # Kept for API/config compatibility; the functional encoding has no
+        # table size limit, so max_seq_len is only validated, never indexed.
+        self.embedding_dim = embedding_dim
         self.max_seq_len = max_seq_len
         self.max_offset = max_offset
         self.digit_token_start = digit_token_start
@@ -123,15 +147,14 @@ class AbacusEmbedding(nn.Module):
         ``offset`` is added only to digit positions (>0), matching the paper's
         ``output[output > 0] += k``.  The non-digit slot is never shifted.
         """
+        ids = column_ids.to(torch.float32)
         if offset:
-            column_ids = torch.where(column_ids > 0, column_ids + offset, column_ids)
-        max_id = int(column_ids.max()) if column_ids.numel() else 0
-        if max_id >= self.max_seq_len:
-            raise ValueError(
-                f"Abacus position {max_id} exceeds embedding table size {self.max_seq_len}; "
-                "increase max_seq_len or reduce max_offset."
-            )
-        return self.embedding(column_ids)
+            ids = torch.where(column_ids > 0, ids + offset, ids)
+        args = ids.unsqueeze(-1) * self.freqs
+        emb = torch.cat([torch.sin(args), torch.cos(args)], dim=-1)
+        emb = self.proj(emb)
+        is_digit = (column_ids > 0).unsqueeze(-1)
+        return torch.where(is_digit, emb, self.non_digit.to(emb.dtype))
 
 
 class Attention(nn.Module):
@@ -216,17 +239,18 @@ class TransformerBlock(nn.Module):
 
 
 class AbacusTransformerModel(nn.Module):
-    """Decoder-only Transformer with learned Abacus positional embeddings.
+    """Decoder-only Transformer with sinusoidal Abacus positional embeddings.
 
     Architecture:
         token ids -> token embedding (scale by sqrt(hidden_size))
-                  -> + learned Abacus embedding indexed by digit column
+                  -> + sinusoidal Abacus embedding of the digit column
                   -> N x TransformerBlock (standard causal self-attention + FFN)
                   -> LayerNorm -> linear projection to vocab logits
 
-    The only intentional architectural difference from the RoPE baseline is the
-    positional signal, so both experiments have the same depth, width, heads,
-    feedforward width, dropout, optimizer, data, and training schedule.
+    The positional signal is the only intentional architectural difference from
+    the RoPE baseline.  The Abacus depth is configurable per experiment (the
+    local SinAbacus run uses 8 layers); width, heads, feedforward width,
+    dropout, optimizer, data, and training schedule match the baseline.
     """
 
     def __init__(

@@ -6,7 +6,7 @@ model:
   _target_: models.abacus_transformer.AbacusTransformerModel
   collate_fn_target: models.causal_lm.CausalLMCollateFn
   hidden_size: 256
-  num_layers: 4
+  num_layers: 8
   num_heads: 8
   feedforward_dim: 1024
   dropout: 0.0
@@ -94,7 +94,7 @@ trainer:
   exact_match_every_epochs: null
 output:
   root: outputs
-  run_name: abacus-adamw-large-local
+  run_name: sinabacus-8l-local
 logger: tensorboard
 wandb:
   enabled: true
@@ -103,10 +103,12 @@ wandb:
   mode: auto
   tags:
   - abacus
+  - sinabacus
   - adamw
   - large
+  - 8-layers
   - local-150k
-  run_name: abacus-adamw-large-local
+  run_name: sinabacus-8l-local
   resume: true
 seed: 42
 device: null
