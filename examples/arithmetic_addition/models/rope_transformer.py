@@ -1,9 +1,9 @@
 import math
-from typing import Any
 
 import torch
 from torch import nn
-from torch.nn.utils.rnn import pad_sequence
+
+from models.causal_lm import CausalLMCollateFn, CausalLMCrossEntropyLoss
 
 
 class RotaryEmbedding(nn.Module):
@@ -269,60 +269,13 @@ class RoPETransformerModel(nn.Module):
         return self.proj(x)
 
 
-class CausalLMCollateFn:
-    """Collate sequences for decoder-only autoregressive training.
-
-    Pads a batch of variable-length sequences to the same length using *left*-padding
-    (padding tokens are prepended rather than appended).  Left-padding keeps all real
-    tokens right-aligned so a single causal mask works correctly for the whole batch.
-
-    The trick used here is: flip each sequence, right-pad with ``pad_sequence``, then
-    flip the result back -- this is equivalent to left-padding.
-
-    ``ignore_index`` (-100 by default) is used as the label value for padding
-    positions so that PyTorch's ``CrossEntropyLoss`` ignores them during training.
-    """
-
-    def __init__(self, tokenizer: Any) -> None:
-        self.tokenizer = tokenizer
-        pad_id = getattr(tokenizer, "pad_token_id", None)
-        self.pad_token_id = pad_id if pad_id is not None else 0
-        # Cross-entropy ignores positions with this label value (PyTorch convention)
-        self.ignore_index = -100
-
-    def __call__(self, batch: list[Any]) -> dict[str, torch.Tensor]:
-        input_ids_list = []
-        attention_mask_list = []
-        labels_list = []
-        for item in batch:
-            input_ids = item.train_input_ids
-            labels = item.train_label_ids
-            attention_mask = item.attention_mask
-
-            # We flip the sequences to have padding on the left, which allows us to use causal masking without modification
-            input_ids_list.append(input_ids.flip(0))
-            labels_list.append(labels.flip(0))
-            attention_mask_list.append(attention_mask.flip(0))
-
-        # pad_sequence right-pads; flipping before and after converts that to left-padding
-        padded_input_ids = pad_sequence(
-            input_ids_list,
-            batch_first=True,
-            padding_value=self.pad_token_id if self.pad_token_id is not None else 0,
-        ).flip(1)
-        padded_attention_mask = pad_sequence(attention_mask_list, batch_first=True, padding_value=0).flip(1)
-        # Use ignore_index so the loss function skips padded label positions
-        padded_labels = pad_sequence(labels_list, batch_first=True, padding_value=self.ignore_index).flip(1)
-
-        return {
-            "input_ids": padded_input_ids,
-            "attention_mask": padded_attention_mask,
-            "labels": padded_labels,
-        }
-
-
-class CausalLMCrossEntropyLoss(nn.CrossEntropyLoss):
-    """Cross-entropy for logits with vocabulary in the last dimension."""
-
-    def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        return super().forward(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
+__all__ = [
+    "RotaryEmbedding",
+    "rotate_half",
+    "apply_rotary_pos_emb",
+    "Attention",
+    "TransformerBlock",
+    "RoPETransformerModel",
+    "CausalLMCollateFn",
+    "CausalLMCrossEntropyLoss",
+]

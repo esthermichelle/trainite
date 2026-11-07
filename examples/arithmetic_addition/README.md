@@ -1,517 +1,255 @@
-# Trainite Project: arithmetic-addition-starter
+# Arithmetic Addition: RoPE baseline vs. Abacus
 
-> Generated with Trainite v0.1.0 using:
-> ```bash
-> trainite init arithmetic-addition-starter --model rope-transformer --dataset arithmetic-addition --trainer decoder-trainer
-> ```
+This example contains a controlled comparison between two decoder-only
+Transformers on synthetic multi-digit addition:
 
-Welcome to your new Trainite-generated training project!
+| Experiment | Positional signal | Optimizer | Config |
+| --- | --- | --- | --- |
+| Baseline | RoPE (rotary relative positions) | AdamW | `config.yaml` |
+| Abacus | Learned Abacus digit-column embeddings | AdamW | `config_abacus.yaml` |
 
-Trainite is a toolbox for training language models with PyTorch-Ignite. This project contains real, readable Python files that you own and can modify as needed.
+There are three matched size/budget variants:
 
-## Project Structure
+| Variant | Configs | Train | OOD test | Epochs | Use |
+| --- | --- | --- | --- | --- | --- |
+| Small | `config.yaml`, `config_abacus.yaml` | 2-6 / 100k | 7-10 / 2k | 300 | quick local runs |
+| Large | `config_large.yaml`, `config_abacus_large.yaml` | 2-6 / 200k | 7-12 / 5k | 150 | Modal / fast GPU |
+| Local | `config_large_local.yaml`, `config_abacus_local.yaml` | 2-6 / 150k | 7-12 / 5k | 150 | RTX 2050, both models in ~4.5h |
 
-- `config.yaml`: The central configuration for your experiment. Edit this to change hyperparameters, dataset paths, or output settings.
-- `main.py`: The entrypoint for training. Run it with `python main.py config.yaml`.
-- `models/`: Contains the model architecture definition.
-- `dataset_impl/`: Contains the selected dataset and transform implementations.
-- `trainer.py`: Defines the training and evaluation logic. You can override `_train_step` or `_eval_step` here.
-- `config.py`: Contains base Pydantic models for configuration structure validation.
-- `utils.py`: Shared utilities for configuration and logging.
+The small and large variants use the same architecture, data format, loss, and
+optimizer; they differ only in dataset size, OOD range, and model width (4x128
+for small, 4x256 for large). The local variant keeps the large model and OOD
+test but uses a 150k training pool and a 150-epoch budget so both models finish
+in roughly 4.5 hours on the RTX 2050.
 
-## Getting Started
+The experiment isolates the positional-encoding change. Both models use the
+same generated data, the same disjoint train/validation split, the same OOD
+test split, the same tokenizer, the same preprocessing, the same training and
+evaluation sequence lengths, the same depth/width/heads/FFN/dropout, and the
+same optimizer and training budget.
 
-You can set up and run this project using either **uv** (recommended for speed) or standard **pip**.
+## Data and fairness
 
-### Option A: Using uv (Recommended)
+The local dataset (`dataset_impl/arithmetic_addition.py`) writes operands and
+answers **least-significant digit first** (LSB-first / reversed). Reversal is
+required for Abacus: it makes the column id of an already-generated token
+independent of how many future digits will be generated. The same reversed
+format is used by the RoPE baseline, so the comparison is not confounded by
+data order.
 
-[uv](https://github.com/astral-sh/uv) is an extremely fast Python package installer and resolver.
+Splits:
 
-1. **Install uv** (if you don't have it):
-   * **macOS/Linux**:
-     ```bash
-     curl -LsSf https://astral.sh/uv/install.sh | sh
-     ```
-   * **Windows**:
-     ```powershell
-     powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-     ```
-   * Or via pip: `pip install uv`
+- **Small configs**: 2-6 digit train/ID validation, generated from one pool with
+  `seed=42`, sliced into 100,000 train and 1,000 validation examples (disjoint);
+  OOD test is 7-10 digits (`seed=200`, 2,000 examples).
+- **Large configs**: the same 2-6 digit pool scaled to 200,000 train and 5,000
+  validation examples; OOD test is 7-12 digits (`seed=200`, 5,000 examples).
+- **Local configs**: the same setup with a 150,000-example training pool and
+  5,000 validation examples.
 
-2. **Install Dependencies & Set Up Virtual Environment**:
-   ```bash
-   uv sync
-   ```
+The original (MSB-first) strings are kept as `original_source` /
+`original_target` metadata and only used for readable logs; all model inputs and
+metrics use the LSB-first representation.
 
-3. **Run Training**:
-   ```bash
-   uv run python main.py config.yaml
-   ```
+## Abacus implementation
 
-4. **Monitor Progress**:
-   ```bash
-   uv run tensorboard --logdir outputs
-   ```
+`models/abacus_transformer.py` follows the official implementation for
+“Transformers Can Do Arithmetic with the Right Embeddings” (McLeish et al.,
+2024, https://arxiv.org/abs/2405.17399):
 
-### Option B: Using standard pip & venv
+- one learned embedding table, indexed by digit column;
+- column ids are consecutive and one-based from the start of each number
+  (the units digit, because data is LSB-first);
+- all non-digit tokens share slot `0`;
+- a single offset `k ~ U[0, max_offset]` is sampled per training batch and added
+  to digit positions only; inference uses offset `0`;
+- the Abacus embedding is **added** to the token embedding, not concatenated.
 
-If you prefer standard Python tools, you can create a virtual environment and use `pip`:
+Paper add-ons outside the positional-encoding change — input injection,
+progressive loss, and the depth-recurrent/looped transformer — are intentionally
+excluded, so the shared trunk and training compute match the baseline. The only
+added parameters are the Abacus column table itself.
 
-1. **Create and Activate a Virtual Environment**:
-   * **macOS/Linux**:
-     ```bash
-     python3 -m venv .venv
-     source .venv/bin/activate
-     ```
-   * **Windows**:
-     ```cmd
-     python -m venv .venv
-     .venv\Scripts\activate
-     ```
+The critical consistency property is: appending generated digits never changes
+an earlier token's column id, so teacher-forced training and autoregressive
+generation assign identical ids.
 
-2. **Install Dependencies**:
-   ```bash
-   pip install -e .
-   ```
+The shared Transformer trunk (hidden size, depth, heads, FFN, dropout) is
+identical to the baseline. Abacus additionally owns its learned column table
+(1024 x hidden size), which is the method's positional-parameter overhead; the
+comparison reports this transparently rather than hiding it.
 
-   > [!NOTE]
-   > `pip install -e .` only installs this project's dependencies — it does **not**
-   > build the project into an installable Python package. This project is meant
-   > to be run from source via `python main.py config.yaml`.
-   >
-   > To make it installable as a real package, restructure your code into a single
-   > package — e.g., move `models/`, `dataset_impl/`, `preprocessors/` and the
-   > top-level modules (`main.py`, `config.py`, `trainer.py`, `utils.py`) into a
-   > `src/<your_package>/` directory with `__init__.py` files — then edit
-   > `pyproject.toml` to replace the `[tool.setuptools]` block with:
-   >
-   > ```toml
-   > [tool.setuptools.packages.find]
-   > where = ["src"]
-   > include = ["<your_package>*"]
-   > ```
-   >
-   > and run `pip install -e .` again. See the
-   > [setuptools package discovery docs](https://setuptools.pypa.io/en/latest/userguide/package_discovery.html)
-   > for other layouts.
+## Setup
 
-3. **Run Training**:
-   ```bash
-   python main.py config.yaml
-   ```
+The example is self-contained: it does **not** import `trainite.*` at runtime.
+PyTorch, PyTorch-Ignite, Accelerate, TensorBoard, and W&B are used.
 
-4. **Monitor Progress**:
-   ```bash
-   tensorboard --logdir outputs
-   ```
+Using the existing environment:
 
-### Option C: Cloud Training (SkyPilot)
-
-To launch this experiment on cloud GPUs (AWS, GCP, Azure, Lambda, etc.) using [SkyPilot](https://docs.skypilot.ai/):
-
-1. **Initialize SkyPilot configuration** (if not already generated):
-   ```bash
-   trainite add:sky
-   ```
-   This generates `sky.yaml` and adds `skypilot` to `pyproject.toml`.
-
-2. **Update dependencies & verify cloud**:
-   ```bash
-   pip install -e .    # or: uv sync
-   sky check
-   ```
-
-3. **Launch on Cloud**:
-   ```bash
-   sky launch sky.yaml
-   ```
-
-> [!TIP]
-> Trainite installs the base `skypilot` package. Running `sky check` will detect your active cloud credentials and provide the exact one-line command to install your specific cloud provider's driver if needed (e.g. `pip install "skypilot[aws]"` or `pip install "skypilot[kubernetes]"`).
->
-> You can also run jobs on your own on-premises servers or custom clusters via SSH by following SkyPilot's [Existing Machines guide](https://docs.skypilot.co/en/latest/reservations/existing-machines.html).
-
-## Experiment Logging and Checkpoints
-
-The default `logger: tensorboard` stores metrics and checkpoints locally. To use ClearML instead:
-
-1. Run `clearml-init` to configure your ClearML server and credentials.
-2. Set `logger: clearml` in `config.yaml`.
-
-ClearML runs still keep checkpoints in the local output directory. By default, `ClearMLSaver` also uploads them to
-ClearML's file server with `output_uri=True`.
-
-To change checkpoint storage, edit the `ClearMLSaver` call in `trainer.py`:
-
-- Use a storage URI such as `s3://bucket/path` to upload somewhere else.
-- Use `None` to leave the destination to `CLEARML_DEFAULT_OUTPUT_URI` or
-  `sdk.development.default_output_uri` in `clearml.conf`.
-
-To disable checkpoint uploads while retaining ClearML metric logging, pass `output_uri=False` to `ClearMLLogger` in
-`utils.py` and use `output_uri=None` for `ClearMLSaver` in `trainer.py`.
-
-## Components
-
-### Models: rope_transformer
-#### rope_transformer
-# RoPE Transformer model
-
-It is a decoder-only Transformer with Rotary Position Embeddings (RoPE): given a sequence of token IDs, it predicts the next token at every position.
-
-## What goes in / out
-
-- **Input**:
-  - `input_ids` with shape `(batch, seq_len)`
-  - `attention_mask` (optional) with shape `(batch, seq_len)`
-- **Output**: logits with shape `(batch, seq_len, vocab_size)`
-
-The trainer uses these logits with cross-entropy loss.
-
-## What the model is made of
-
-The model is small and standard:
-
-1. **Embedding**
-   Converts token IDs into vectors.
-2. **Rotary Positional Encoding (RoPE)**
-   Applies relative position rotation to query and key vectors.
-3. **Transformer blocks**
-   Repeated attention + feedforward layers.
-4. **Final projection**
-   Maps hidden states back to vocabulary logits.
-
-## Practical notes
-
-### Padding
-Padding ID is `0`. The model ignores padded positions in attention.
-
-### Sequence length
-`max_seq_len` represents the precomputed cache size for RoPE. Inputs longer than this will fall back to slower on-the-fly calculations.
-
-### Hidden size and heads
-`hidden_size` must be divisible by `num_heads`.
-
-### Rotary positional encoding
-`head_dim` (which is `hidden_size // num_heads`) must be even because RoPE rotates pairs of dimensions.
-
-## Config knobs
-
-### `hidden_size`
-Size of the token embeddings and hidden states.
-
-Bigger values usually give more capacity, but cost more memory and time.
-
-### `num_layers`
-How many Transformer blocks to stack.
-
-More layers = more capacity, slower training.
-
-### `num_heads`
-How many attention heads to use.
-
-Choose a value that divides `hidden_size` cleanly.
-
-### `feedforward_dim`
-Size of the feedforward layer inside each block.
-
-A common choice is `2x` to `4x` of `hidden_size`.
-
-### `dropout`
-Dropout rate used in attention and feedforward layers.
-
-### `max_seq_len`
-Precomputed cache size for the rotary position embeddings.
-
-## Minimal config example
-
-```yaml
-model:
-  _target_: models.rope_transformer.RoPETransformerModel
-  hidden_size: 128
-  num_layers: 4
-  num_heads: 4
-  feedforward_dim: 256
-  dropout: 0.1
-  max_seq_len: 64
+```bash
+cd examples/arithmetic_addition
+source .venv/bin/activate
 ```
 
-## When to change this file
+Using `uv` from scratch:
 
-Edit `models/rope_transformer.py` if you want to:
-
-- make the model wider or deeper
-- swap attention or feedforward behavior
-- change how padding is handled
-- add caching or other sequence features
-
-## Good starting rule
-
-If the dataset is tiny, start with a small model:
-
-- `hidden_size=64`
-- `num_layers=2`
-- `num_heads=2`
-- `feedforward_dim=128`
-
-If training is stable and the model underfits, scale up from there.
-
-
-### Dataset: arithmetic_addition
-
-
-### Trainer: decoder_trainer
-# Trainer
-
-`Trainer` (registered as `decoder-trainer`) is the default training loop for this project.
-
-It is built on PyTorch-Ignite and already handles the things you usually want on day one:
-
-- training and evaluation loops
-- optimizer setup
-- mixed precision (AMP: float32, fp16, bf16) via Hugging Face Accelerate
-- multi-GPU distributed data parallel (DDP) support via Hugging Face Accelerate
-- learning-rate warmup + decay
-- checkpoints
-- early stopping
-- TensorBoard logging
-
-## What it expects
-
-`Trainer` works with a model that returns logits shaped like:
-
-```python
-(batch, seq_len, vocab_size)
+```bash
+cd examples/arithmetic_addition
+uv sync
 ```
 
-and a batch that looks like:
+## Training
 
-```python
-{
-    "input_ids": Tensor,
-    "labels": Tensor,
-    "attention_mask": Tensor,  # Optional
-}
+Run from `examples/arithmetic_addition`:
+
+```bash
+./.venv/bin/python main.py config.yaml          # baseline-adamw
+./.venv/bin/python main.py config_abacus.yaml   # abacus-adamw
 ```
 
-It uses cross-entropy loss and ignores label value `-100`.
+Large run on Modal (L4 by default, ~4-5h for both; L40S ~2.5-3h):
 
-## What happens during training
+```bash
+modal run modal_train.py                    # config_large.yaml then config_abacus_large.yaml
+modal run modal_train.py --gpu L40S
+```
 
-For each batch:
+Modal requires a payment method on file even though the $30/month credit covers
+this run. Outputs are written to the `arithmetic-addition-outputs` Volume:
 
-1. move batch to device
-2. run forward pass
-3. compute cross-entropy loss
-4. backpropagate
-5. clip gradients if `grad_clip_norm` is set
-6. step optimizer
+```bash
+modal volume get arithmetic-addition-outputs / ./modal_outputs
+```
 
-At the end of each epoch it also runs evaluation on:
+Local run (RTX 2050, both models sequentially, 150k samples, 150 epochs each):
 
-- training data
-- validation data, if present
+```bash
+cd examples/arithmetic_addition
+./.venv/bin/python main.py config_large_local.yaml
+./.venv/bin/python main.py config_abacus_local.yaml
+```
 
-At the end of the training run, it runs a final evaluation on the test data, if present.
+Or both in one shell:
 
-## Logging and checkpoints
+```bash
+./.venv/bin/python main.py config_large_local.yaml && \
+  ./.venv/bin/python main.py config_abacus_local.yaml
+```
 
-`Trainer` saves a run directory like this:
+Each run creates a timestamped directory:
 
 ```text
 outputs/<run_name>/<timestamp>/
+├── best.pt                 # lowest validation loss
+├── last.pt                 # most recent epoch
+├── config.yaml             # resolved config for this run
+├── output.log              # console output, appended by evaluate.py too
+├── eval_context.json       # best epoch/global step and final eval metrics
+├── wandb_run_id.txt        # W&B run id used by evaluate.py
+├── tensorboard/            # TensorBoard event files
+└── wandb/                  # W&B run files (offline runs live here)
 ```
 
-Inside it you get:
+Checkpoint selection is identical for both experiments: the checkpoint with the
+lowest ID validation loss. Final ID and OOD metrics are logged at that best
+checkpoint's epoch/global step, and `evaluate.py` reuses the same association
+from `eval_context.json`.
 
-- `config.yaml`
-- `output.log`
-- `last_*` checkpoint
-- `best_*` checkpoint if validation exists
-- TensorBoard logs
+### W&B behavior
 
-## Config knobs
+`wandb.mode: auto` means:
 
-### `epochs`
-How many full passes over the training data to run.
+- `online` when `WANDB_API_KEY` is set;
+- otherwise `offline` (no network required).
 
-### `precision`
-Mixed precision training mode: `"float32"` (default), `"fp16"`, or `"bf16"`.
-Managed automatically via Hugging Face Accelerate.
-
-- `"float32"`: Standard full precision.
-- `"fp16"`: Half precision with dynamic loss scaling (recommended for NVIDIA GPUs with Tensor Cores).
-- `"bf16"`: Bfloat16 mixed precision without loss scaling (recommended for Ampere+ GPUs or modern CPUs/TPUs).
-
-### `log_every_steps`
-How often to print training updates.
-
-### `grad_clip_norm`
-If set, gradients are clipped before the optimizer step.
-
-This can help when training becomes unstable.
-
-### `early_stopping_patience`
-Number of epochs to wait for validation loss improvement before stopping training early. Set to `null` to disable early stopping.
-
-### `inference_every_epochs`
-Run qualitative generation/inference tests on the model every N epochs. Set to `null` to disable.
-
-### `inference_num_samples`
-Number of random prompt samples to generate and log during the evaluation inference phase.
-
-### `max_inference_new_tokens`
-Maximum number of new tokens to generate per sample.
-
-## Distributed Training (Multi-GPU)
-
-`Trainer` uses [Hugging Face Accelerate](https://huggingface.co/docs/accelerate/index) to scale seamlessly across multiple GPUs without code changes.
-
-Launch distributed training using `accelerate launch`:
+Run names are `baseline-adamw` / `abacus-adamw` for the small configs,
+`baseline-adamw-large` / `abacus-adamw-large` for the large configs, and
+`baseline-adamw-large-local` / `abacus-adamw-large-local` for the local
+configs, all in project `arithmetic-addition`. Logging failures are caught and
+downgraded to warnings so training never depends on W&B. To force offline mode:
 
 ```bash
-# Launch directly specifying the number of processes:
-accelerate launch --num_processes=4 main.py config.yaml
-
-# Or configure your environment interactively once:
-accelerate config
-# And launch with saved settings:
-accelerate launch main.py config.yaml
+WANDB_MODE=offline ./.venv/bin/python main.py config.yaml
 ```
 
-Accelerate automatically handles DDP wrapping, data partitioning (distributed samplers), and metric synchronization across all processes. Checkpoints and evaluation logs are automatically isolated to the main process (rank 0).
+To upload a completed offline run:
 
-For further reading, see:
-- [Launching Distributed Code](https://huggingface.co/docs/accelerate/basic_tutorials/launch)
-- [Accelerate Command Line Reference](https://huggingface.co/docs/accelerate/package_reference/cli)
-
-## What to tweak first
-
-If you are just getting started, the usual first changes are:
-
-- `epochs`
-- `precision`
-- `log_every_steps`
-- `grad_clip_norm`
-- `early_stopping_patience`
-- optimizer settings in `config.yaml`
-
-## If you want to customize behavior
-
-Edit `trainer.py` if you want to:
-
-- change how loss is computed
-- add gradient accumulation
-- add new metrics
-- change checkpoint rules
-- change validation frequency
-- change logging behavior
-
-The main places to look are:
-
-- `_train_step`
-- `_eval_step`
-- `_attach_metrics`
-
-## Minimal config example
-
-```yaml
-trainer:
-  epochs: 10
-  precision: bf16  # float32, fp16, or bf16
-  log_every_steps: 20
-  grad_clip_norm: 1.0
+```bash
+./.venv/bin/wandb sync outputs/baseline-adamw/<timestamp>/wandb/offline-run-*
 ```
 
-## Good starting rule
+## Evaluation
 
-If the run fails or looks unstable, check these first:
+`evaluate.py` reloads a run's best checkpoint, evaluates ID (validation) and OOD
+(test) splits with the same `evaluation.evaluate_split` helper used by training,
+appends to that run's `output.log`, and writes to the **same** TensorBoard
+directory and W&B run (via `wandb_run_id.txt`). It never creates a new run
+directory or W&B run.
 
-- input and label shapes match
-- `vocab_size` is large enough for the dataset
-- `max_seq_len` is long enough
-- learning rate is not too high
-
-
-### Preprocessor: char_tokenizer
-# Char Tokenizer
-
-`CharTokenizer` is a simple character-level tokenizer with a configurable vocabulary.
-
-## Features
-
-- Character-to-ID mapping from a charset preset or literal custom charset.
-- Special tokens:
-  - `<PAD>` (ID 0)
-  - `<BOS>` (ID 1)
-  - `<SEP>` (ID 2)
-  - `<EOS>` (ID 3)
-  - `<UNK>` (ID 4)
-- Supports padding, truncation, and PyTorch tensor generation.
-
-## Config knobs
-
-### `_target_`
-
-Must be set to `preprocessors.char_tokenizer.CharTokenizer` in the template config.
-
-### `charset`
-
-Accepts the same presets as the string-reverse dataset, including `@universal`, `@alpha`, `@digits`, and `@alphanumeric`. A literal string defines a custom vocabulary.
-
-## Minimal config example
-
-```yaml
-preprocessor:
-  _target_: preprocessors.char_tokenizer.CharTokenizer
-  charset: "@alphanumeric"
+```bash
+./.venv/bin/python evaluate.py config.yaml
+./.venv/bin/python evaluate.py config_abacus.yaml
 ```
 
+Useful options:
 
-## Understanding `utils.py`
-
-`utils.py` contains the bootstrapping and setup logic that links your configurations to executable code. It primarily acts as the file where all the helper functions are located that are being used in `trainer.py`. It handles parsing of dynamic `_target_` paths from `config.yaml`, builds your models and datasets, manages dataset splitting, and attaches standard PyTorch-Ignite event handlers (such as checkpointing, early stopping, learning rate scheduling, and logging).
-
-Since the generated code in `utils.py` belongs to you, you can modify it directly to customize checkpoint rules, adjust early stopping metrics, or add new loggers.
-
-## Customization
-
-### Dataset Configuration
-
-You can configure your data in two ways in `config.yaml`:
-
-#### Option 1: Explicit Splits
-Define exactly what goes into each split. Use this for established datasets with fixed splits.
-```yaml
-data:
-  train:
-    dataset:
-      _target_: ...
-    dataloader:
-      batch_size: 32
-      shuffle: true
-  val:
-    dataset:
-      _target_: ...
-    dataloader:
-      batch_size: 32
+```bash
+--checkpoint PATH        # explicit best.pt (default: newest run for the config)
+--run-dir DIRECTORY      # run directory containing best.pt
+--max-examples N         # limit samples per split (smoke testing)
+--skip-wandb
+--skip-tensorboard
 ```
 
-#### Option 2: Automatic Splitting
-Define a single dataset and split ratios. Trainite will split it randomly (with a fixed seed).
-```yaml
-data:
-  dataset:
-    _target_: ...
-  test_ratio: 0.1
-  val_ratio: 0.1
-  dataloader:
-    batch_size: 32
+Exact match is the primary metric; teacher-forced token accuracy is secondary.
+
+## Dashboards
+
+TensorBoard:
+
+```bash
+./.venv/bin/tensorboard --logdir outputs
 ```
-*Note: In Option 2, the training split defaults to `shuffle: true`, while others default to `shuffle: false`.*
 
-### Adding Configuration Parameters
-1. Add the parameter to `config.yaml`.
-2. (Optional) Update the corresponding Pydantic model in `config.py` if you want strict validation and IDE autocomplete for custom fields.
+W&B (when online): project `arithmetic-addition`, with run names matching the
+config variant (`*-large`, `*-large-local`). Offline runs can be viewed after
+`wandb sync`.
 
-## Design Philosophy
-The code generated here is yours. There are no hidden abstractions or magic imports. Feel free to refactor or rewrite any part of it to suit your research needs.
+Logged metrics:
+
+| Tag | Meaning |
+| --- | --- |
+| `training/batch_loss` | smoothed per-iteration training loss |
+| `training/loss`, `validation/loss` | epoch-level train/validation loss |
+| `training/token_accuracy`, `validation/token_accuracy` | epoch-level token accuracy |
+| `training/learning_rate` | learning rate at epoch end |
+| `progress/epoch`, `progress/global_step` | epoch and optimizer step |
+| `eval/id/exact_match`, `eval/ood/exact_match` | primary final metrics |
+| `eval/id/token_accuracy`, `eval/ood/token_accuracy` | secondary final metrics |
+| `eval/{id,ood}/exact_match/len_AxB` | exact match per operand-length bucket |
+| `eval/best_val_loss` | validation loss of the selected checkpoint |
+| `inference/training`, `inference/validation` | qualitative sample text summaries |
+
+## Verification status
+
+Verified locally:
+
+- both experiments complete short smoke runs with TensorBoard and offline W&B
+  logging;
+- two identical seeded short runs produced identical losses for both models;
+- `evaluate.py` loads the best checkpoint, appends to `output.log`, and writes
+  to the same TensorBoard directory/W&B run id;
+- the small baseline completed a full 300-epoch run on the RTX 2050 (ID exact
+  match 1.0000, 7-10 digit OOD token accuracy 0.3750);
+- measured RTX 2050 epoch times: 4x128 / 100k is ~19-21 s; 4x256 / 200k is
+  ~75 s (baseline) and ~66 s (Abacus). At 150k that is ~57 s and ~50 s
+  respectively, putting the local variant (150 epochs each) at ~4.5 h for
+  both models.
+
+**Not verified here:** convergence and final OOD quality for the large and
+local variants. Run both configs in a variant on the same hardware and
+compare their best-validation-loss checkpoints before drawing conclusions.
+
+The Muon and zero-padding variants, and any separate reversed-operand
+experiment, are left untouched. This comparison deliberately uses LSB-first
+data for both models, as described above.

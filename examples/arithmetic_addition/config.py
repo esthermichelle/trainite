@@ -1,4 +1,5 @@
 from typing import Literal, Self
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -37,7 +38,7 @@ class OptimizerConfig(BaseModel):
 
 class LossConfig(BaseModel):
     model_config = ConfigDict(extra="allow", validate_assignment=True)
-    target: str = Field(alias="_target_", default="trainite.models.basic_transformer.CausalLMCrossEntropyLoss")
+    target: str = Field(alias="_target_", default="models.causal_lm.CausalLMCrossEntropyLoss")
     ignore_index: int = -100
 
 
@@ -90,6 +91,28 @@ class TrainerConfig(BaseModel):
     inference_num_samples: int = Field(default=5, gt=0)
     max_inference_new_tokens: int = Field(default=16, gt=0)
     grad_clip_norm: float | None = Field(default=None, gt=0.0)
+    # Run generation-based ID validation exact-match during training every N
+    # epochs.  None keeps the full generation evaluation for the end of
+    # training only (best checkpoint).
+    exact_match_every_epochs: int | None = Field(default=None, gt=0)
+    eval_batch_size: int = Field(default=128, gt=0)
+
+
+class WandbConfig(BaseModel):
+    """Weights & Biases settings.
+
+    ``mode="auto"`` uses W&B online when ``WANDB_API_KEY`` is set and falls back
+    to offline otherwise, so training never blocks on network/authentication.
+    Logging failures are caught and downgraded to a warning.
+    """
+
+    model_config = ConfigDict(validate_assignment=True)
+    enabled: bool = True
+    project: str = "arithmetic-addition"
+    entity: str | None = None
+    mode: Literal["auto", "online", "offline", "disabled"] = "auto"
+    tags: list[str] = Field(default_factory=list)
+    run_name: str | None = None
 
 
 class ProjectConfig(BaseModel):
@@ -103,5 +126,6 @@ class ProjectConfig(BaseModel):
     trainer: TrainerConfig = Field(default_factory=TrainerConfig)
     output: OutputConfig
     logger: Literal["tensorboard", "clearml"] = "tensorboard"
+    wandb: WandbConfig = Field(default_factory=WandbConfig)
     seed: int = 42
     device: str | None = None

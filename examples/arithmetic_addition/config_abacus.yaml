@@ -1,86 +1,78 @@
-project_name: arithmetic-addition-abacus-looped
-
+project_name: arithmetic-addition
 preprocessor:
-  _target_: trainite.preprocessors.char_tokenizer.CharTokenizer
-  charset: "0123456789+"
-
+  _target_: preprocessors.char_tokenizer.CharTokenizer
+  charset: 0123456789+
 model:
   _target_: models.abacus_transformer.AbacusTransformerModel
-  collate_fn_target: trainite.models.rope_transformer.CausalLMCollateFn
+  collate_fn_target: models.causal_lm.CausalLMCollateFn
   hidden_size: 128
-  token_embed_dim: 96
-  abacus_dim: 32
-  num_cyclic_positions: 6   # >= longest trained digit span (max_digits=4 -> result up to 5 columns); wraps cyclically beyond
-  digit_token_start: 5      # CharTokenizer with charset "0123456789+": digits are ids 5..14
-  num_digit_tokens: 10
-  num_loops: 4              # looped transformer: inner stack reused num_loops times (effective depth 3x4=12)
-  num_layers: 3
+  num_layers: 4
   num_heads: 4
   feedforward_dim: 512
   dropout: 0.0
-
+  max_seq_len: 1024
+  max_offset: 100
+  digit_token_start: 5
+  num_digit_tokens: 10
 optimizer:
   _target_: torch.optim.AdamW
   lr: 0.001
-
 loss:
-  _target_: models.abacus_transformer.CausalLMCrossEntropyLoss
+  _target_: models.causal_lm.CausalLMCrossEntropyLoss
   ignore_index: -100
-
 data:
   train:
     dataset:
       _target_: dataset_impl.arithmetic_addition.ArithmeticAdditionDataset
-      size: 50000
-      train_size: 50000
+      size: 100000
+      train_size: 100000
       val_size: 1000
       min_digits: 2
-      max_digits: 4
+      max_digits: 6
       seed: 42
       split: train
+      reverse_digits: true
     transform:
-      _target_: trainite.datasets.string_reverse.PromptCompletionTransform
+      _target_: dataset_impl.prompt_completion.PromptCompletionTransform
       ignore_index: -100
     dataloader:
       batch_size: 128
       shuffle: true
       num_workers: 0
-
   val:
     dataset:
       _target_: dataset_impl.arithmetic_addition.ArithmeticAdditionDataset
       size: 1000
-      train_size: 50000
+      train_size: 100000
       val_size: 1000
       min_digits: 2
-      max_digits: 4
+      max_digits: 6
       seed: 42
       split: val
+      reverse_digits: true
     transform:
-      _target_: trainite.datasets.string_reverse.PromptCompletionTransform
+      _target_: dataset_impl.prompt_completion.PromptCompletionTransform
       ignore_index: -100
     dataloader:
       batch_size: 128
       shuffle: false
       num_workers: 0
-
   test:
     dataset:
       _target_: dataset_impl.arithmetic_addition.ArithmeticAdditionDataset
-      size: 1000
-      # OOD probe: held-out digit length, same as the baseline experiment
-      min_digits: 5
-      max_digits: 5
+      size: 2000
+      min_digits: 7
+      max_digits: 10
       seed: 200
       split: test
+      reverse_digits: true
     transform:
-      _target_: trainite.datasets.string_reverse.PromptCompletionTransform
+      _target_: dataset_impl.prompt_completion.PromptCompletionTransform
       ignore_index: -100
     dataloader:
       batch_size: 128
       shuffle: false
       num_workers: 0
-
 trainer:
   epochs: 300
   log_every_steps: 200
@@ -89,11 +81,21 @@ trainer:
   inference_num_samples: 5
   max_inference_new_tokens: 16
   grad_clip_norm: 1.0
-
+  eval_batch_size: 128
+  exact_match_every_epochs: null
 output:
   root: outputs
-  run_name: arithmetic_addition_abacus_looped
-
+  run_name: abacus-adamw
 logger: tensorboard
+wandb:
+  enabled: true
+  project: arithmetic-addition
+  entity: null
+  mode: auto
+  tags:
+  - abacus
+  - adamw
+  run_name: abacus-adamw
+  resume: true
 seed: 42
 device: null

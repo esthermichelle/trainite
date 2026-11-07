@@ -1,5 +1,7 @@
 import html
 import logging
+import random
+from pathlib import Path
 
 from accelerate import Accelerator
 import torch
@@ -15,6 +17,7 @@ from config import (
     ProjectConfig,
     TrainerConfig,
 )
+from evaluation import evaluate_exact_match, evaluate_split
 
 from utils import (
     attach_early_stopping,
@@ -27,6 +30,8 @@ from utils import (
     setup_best_model_checkpoint,
     setup_console_logger,
     setup_training_checkpointing,
+    setup_wandb_logging_safe,
+    write_eval_context,
 )
 
 
@@ -90,6 +95,7 @@ class Trainer:
         self.logger: logging.Logger = setup_logger("trainer", level=logging.INFO)
         # Fix randomness for reproducibility across runs with the same seed
         torch.manual_seed(config.seed)
+        random.seed(config.seed)
         self.config: ProjectConfig = config
         self.trainer_config: TrainerConfig = config.trainer
 
@@ -139,6 +145,13 @@ class Trainer:
         self.test_evaluator = Engine(self._eval_step)
         self.metrics: dict = self._attach_metrics()
 
+        # Track the validation epoch that produced the best checkpoint, so the
+        # final evaluation is logged at the correct epoch/global step.
+        self.best_val_loss = float("inf")
+        self.best_epoch = 0
+        self.best_iteration = 0
+        self.val_evaluator.add_event_handler(Events.COMPLETED, self._track_best)
+
         # Run evaluations at the end of each epoch to log training and validation metrics
         self.trainer.add_event_handler(Events.EPOCH_COMPLETED, self._run_evaluations)
 
@@ -162,19 +175,23 @@ class Trainer:
             loss = engine_val.state.metrics["loss"]
             return -loss
 
+        # Only training/validation metrics are auto-logged per epoch.  The test
+        # set is evaluated once against the best checkpoint at the end, so its
+        # metrics are logged at the best checkpoint's step rather than the final
+        # training step.
         evaluators = {"training": self.train_evaluator, "validation": self.val_evaluator}
-        if self.test_loader:
-            evaluators["testing"] = self.test_evaluator
-
         logging_kwargs = {
             "trainer": self.trainer,
-            "optimizers": self.optimizer,
+            # Learning rate is logged explicitly at epoch end to keep the tag
+            # identical in TensorBoard and W&B (training/learning_rate).
+            "optimizers": None,
             "evaluators": evaluators,
             "log_every_iters": self.trainer_config.log_every_steps,
             "trainer_metric_names": ["batch_loss"],
             "evaluator_metric_names": ["loss", "token_accuracy"],
         }
         self.exp_logger = None
+        self.wandb_logger = None
         if self.accelerator.is_main_process:
             if config.logger == "clearml":
                 self.exp_logger = setup_clearml_logging(
@@ -190,6 +207,16 @@ class Trainer:
                     output_path=str(self.run_dir / "tensorboard"),
                     **logging_kwargs,
                 )
+            # W&B is additive: TensorBoard remains the local source of truth.
+            self.wandb_logger = setup_wandb_logging_safe(config, self.run_dir, logging_kwargs)
+
+        # Progress scalars, learning rate, and optional periodic exact match.
+        self.trainer.add_event_handler(Events.EPOCH_COMPLETED, self._log_epoch_progress)
+        if self.trainer_config.exact_match_every_epochs is not None:
+            self.trainer.add_event_handler(
+                Events.EPOCH_COMPLETED(every=self.trainer_config.exact_match_every_epochs),
+                self._run_periodic_id_eval,
+            )
 
         # Setup save handler and checkpointing on main process only
         if self.accelerator.is_main_process:
@@ -225,6 +252,89 @@ class Trainer:
         # Attach inference logger if inference logging is enabled
         if self.inference_every_epochs is not None:
             self.attach_inference_logger()
+
+    def _track_best(self, engine: Engine) -> None:
+        """Remember which validation epoch produced the best checkpoint."""
+        loss = float(engine.state.metrics["loss"])
+        if loss < self.best_val_loss:
+            self.best_val_loss = loss
+            self.best_epoch = self.trainer.state.epoch
+            self.best_iteration = self.trainer.state.iteration
+
+    def _log_scalars(self, metrics: dict[str, float], step: int) -> None:
+        """Write the same scalar values to TensorBoard (or ClearML) and W&B."""
+        clean = {key: float(value) for key, value in metrics.items() if value is not None}
+        if not clean:
+            return
+        if self.exp_logger is not None:
+            if self.config.logger == "clearml":
+                for key, value in clean.items():
+                    self.exp_logger.report_scalar(title=key, series="value", value=value, iteration=step)
+            else:
+                for key, value in clean.items():
+                    self.exp_logger.writer.add_scalar(key, value, step)
+        if self.wandb_logger is not None:
+            try:
+                self.wandb_logger.log(clean, step=step)
+            except Exception as exc:  # pragma: no cover - external service
+                # Final evaluation is logged at the best checkpoint's step,
+                # which can be earlier than the last step W&B has already
+                # consumed.  Retry without an explicit step so the metrics are
+                # still recorded instead of losing the whole run.
+                self.logger.warning(
+                    "W&B logging with explicit step failed (%s); retrying without step.", exc
+                )
+                try:
+                    self.wandb_logger.log(clean)
+                except Exception as retry_exc:  # pragma: no cover - external service
+                    self.logger.warning("W&B logging failed (%s); continuing without W&B.", retry_exc)
+                    self.wandb_logger = None
+
+    def _log_epoch_progress(self, engine: Engine) -> None:
+        """Log learning rate, epoch, and global step once per epoch."""
+        step = engine.state.iteration
+        learning_rate = float(self.optimizer.param_groups[0]["lr"])
+        self._log_scalars(
+            {
+                "training/learning_rate": learning_rate,
+                "progress/epoch": float(engine.state.epoch),
+                "progress/global_step": float(step),
+            },
+            step=step,
+        )
+
+    def _run_periodic_id_eval(self, engine: Engine) -> None:
+        """Optional generation-based ID exact-match during training."""
+        if not self.accelerator.is_main_process:
+            return
+        unwrapped_model: torch.nn.Module = self.accelerator.unwrap_model(self.model)
+        result = evaluate_exact_match(
+            unwrapped_model,
+            self.tokenizer,
+            self.config.data.val,
+            self.device,
+            max_new_tokens=self.max_inference_new_tokens,
+            batch_size=self.trainer_config.eval_batch_size,
+        )
+        step = engine.state.iteration
+        metrics = {
+            "eval/id/exact_match": result.exact_match,
+            "eval/id/num_samples": float(result.num_samples),
+            "progress/epoch": float(engine.state.epoch),
+            "progress/global_step": float(step),
+        }
+        val_token_accuracy = self.val_evaluator.state.metrics.get("token_accuracy")
+        if val_token_accuracy is not None:
+            metrics["eval/id/token_accuracy"] = float(val_token_accuracy)
+        for key, stats in result.per_length.items():
+            metrics[f"eval/id/exact_match/{key}"] = stats["accuracy"]
+        self._log_scalars(metrics, step=step)
+        self.logger.info(
+            "epoch=%s ID exact_match=%.4f (%d samples)",
+            engine.state.epoch,
+            result.exact_match,
+            result.num_samples,
+        )
 
     def _train_step(self, engine: Engine, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """Run a single training iteration: forward pass, loss, backward, optimizer step.
@@ -330,43 +440,120 @@ class Trainer:
         self.logger.info("starting run in %s", self.run_dir)
         try:
             self.trainer.run(self.train_loader, max_epochs=self.epochs)
-
-            if self.test_loader:
-                self.test()
+            self.test()
         finally:
             if self.exp_logger is not None:
                 self.exp_logger.close()
+            if self.wandb_logger is not None:
+                try:
+                    self.wandb_logger.close()
+                except Exception:  # pragma: no cover - external service
+                    pass
 
     def test(self, test_loader: DataLoader | None = None) -> None:
-        loader = test_loader or self.test_loader
-        if loader is None:
-            self.logger.warning("No test loader provided. Skipping testing.")
+        """Evaluate the best checkpoint on ID (validation) and OOD (test) sets.
+
+        Exact-match accuracy is the primary metric; teacher-forced token
+        accuracy is the secondary metric.  Results are logged at the best
+        validation checkpoint's epoch/global step so they are not confused with
+        the final training step.
+        """
+        self.accelerator.wait_for_everyone()
+        if not self.accelerator.is_main_process:
             return
 
-        self.accelerator.wait_for_everyone()
-        # Load best model if available
         checkpoint_handler = self.best_checkpoint
         checkpoint_path = None
         if checkpoint_handler and checkpoint_handler.last_checkpoint:
-            checkpoint_path = checkpoint_handler.last_checkpoint
+            checkpoint_path = Path(checkpoint_handler.last_checkpoint)
         elif (self.run_dir / "best.pt").exists():
             checkpoint_path = self.run_dir / "best.pt"
 
+        unwrapped_model: torch.nn.Module = self.accelerator.unwrap_model(self.model)
         if checkpoint_path is not None:
-            self.logger.info("Loading best model for testing from %s", checkpoint_path)
+            self.logger.info("Loading best model for final evaluation from %s", checkpoint_path)
             checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=True)
-            unwrapped_model: torch.nn.Module = self.accelerator.unwrap_model(self.model)
             unwrapped_model.load_state_dict(checkpoint["model"])
         else:
-            self.logger.warning("No best model checkpoint found. Using current model for testing.")
+            self.logger.warning("No best model checkpoint found. Using current model for final evaluation.")
 
-        self.logger.info("Running testing...")
-        self.test_evaluator.run(loader)
-        metrics = self.test_evaluator.state.metrics
+        step = self.best_iteration or self.trainer.state.iteration
+        epoch = self.best_epoch or self.trainer.state.epoch
+        collate_fn_target = self.config.model.collate_fn_target or "models.causal_lm.CausalLMCollateFn"
+
+        metrics: dict[str, float] = {
+            "progress/epoch": float(epoch),
+            "progress/global_step": float(step),
+            "eval/best_val_loss": float(self.best_val_loss) if self.best_val_loss != float("inf") else float("nan"),
+        }
+
+        id_result, id_token_accuracy = evaluate_split(
+            unwrapped_model,
+            self.tokenizer,
+            self.config.data.val,
+            self.device,
+            max_new_tokens=self.max_inference_new_tokens,
+            collate_fn_target=collate_fn_target,
+            batch_size=self.trainer_config.eval_batch_size,
+        )
+        metrics.update(
+            {
+                "eval/id/exact_match": id_result.exact_match,
+                "eval/id/token_accuracy": id_token_accuracy,
+                "eval/id/num_samples": float(id_result.num_samples),
+            }
+        )
+        for key, stats in id_result.per_length.items():
+            metrics[f"eval/id/exact_match/{key}"] = stats["accuracy"]
         self.logger.info(
-            "Test results: loss=%.4f token_acc=%.4f",
-            metrics["loss"],
-            metrics["token_accuracy"],
+            "ID (validation) exact_match=%.4f token_accuracy=%.4f (%d samples)",
+            id_result.exact_match,
+            id_token_accuracy,
+            id_result.num_samples,
+        )
+        for source, target, prediction in id_result.wrong:
+            self.logger.info("  ID wrong: %s = %s -> %s", source, target, prediction)
+
+        test_split = getattr(self.config.data, "test", None)
+        if test_split is not None:
+            ood_result, ood_token_accuracy = evaluate_split(
+                unwrapped_model,
+                self.tokenizer,
+                test_split,
+                self.device,
+                max_new_tokens=self.max_inference_new_tokens,
+                collate_fn_target=collate_fn_target,
+                batch_size=self.trainer_config.eval_batch_size,
+            )
+            metrics.update(
+                {
+                    "eval/ood/exact_match": ood_result.exact_match,
+                    "eval/ood/token_accuracy": ood_token_accuracy,
+                    "eval/ood/num_samples": float(ood_result.num_samples),
+                }
+            )
+            for key, stats in ood_result.per_length.items():
+                metrics[f"eval/ood/exact_match/{key}"] = stats["accuracy"]
+            self.logger.info(
+                "OOD (test) exact_match=%.4f token_accuracy=%.4f (%d samples)",
+                ood_result.exact_match,
+                ood_token_accuracy,
+                ood_result.num_samples,
+            )
+            for source, target, prediction in ood_result.wrong:
+                self.logger.info("  OOD wrong: %s = %s -> %s", source, target, prediction)
+        else:
+            self.logger.warning("No OOD test split configured; skipping OOD evaluation.")
+
+        self._log_scalars(metrics, step=step)
+        write_eval_context(
+            self.run_dir,
+            best_epoch=epoch,
+            best_iteration=step,
+            last_epoch=self.trainer.state.epoch,
+            last_iteration=self.trainer.state.iteration,
+            best_val_loss=self.best_val_loss,
+            metrics=metrics,
         )
 
     def _attach_metrics(self) -> dict[str, Metric]:
@@ -448,18 +635,24 @@ class Trainer:
         num_samples = min(self.inference_num_samples, total_samples)
 
         # Read generation prompts straight off the DatapointModel contract.
+        # ``source``/``target`` are the tokenizer-facing strings (LSB-first for
+        # this experiment), while ``original_source``/``original_target`` are
+        # the conventional MSB-first strings used for human-readable logs.
         prompt_ids_list: list[torch.Tensor] = []
         targets: list[str] = []
         sources: list[str] = []
+        reverse_for_display: list[bool] = []
         for i in range(num_samples):
             item = dataset[i]
-            source = item.source
-            target = item.target
+            lsd_first = getattr(item, "digit_order", None) == "lsd_first"
+            source = item.original_source if getattr(item, "original_source", None) is not None else item.source
+            target = item.original_target if getattr(item, "original_target", None) is not None else item.target
 
             input_ids = item.eval_input_ids
             prompt_ids_list.append(input_ids)
             targets.append(target)
             sources.append(source)
+            reverse_for_display.append(lsd_first)
         self.model.eval()
 
         # Left-pad the prompts (reverse -> pad_sequence -> reverse) so every
@@ -502,6 +695,12 @@ class Trainer:
                 skip_special_tokens=True,
             )
             for tokens in new_tokens
+        ]
+        # Generated answer tokens are LSB-first; reverse them so the logged
+        # prediction matches the conventional MSB-first source/target.
+        decoded_strs = [
+            prediction[::-1] if reverse else prediction
+            for prediction, reverse in zip(decoded_strs, reverse_for_display)
         ]
 
         for idx, (source, target, prediction) in enumerate(zip(sources, targets, decoded_strs), 1):

@@ -1,5 +1,6 @@
 import importlib
 import inspect
+import json
 import logging
 import os
 from datetime import datetime
@@ -19,6 +20,7 @@ from ignite.handlers import (
 )
 from ignite.handlers.clearml_logger import ClearMLSaver
 from ignite.handlers.fbresearch_logger import FBResearchLogger
+from ignite.handlers.logger_utils import setup_wandb_logging
 from ignite.handlers.param_scheduler import ParamScheduler
 from ignite.utils import setup_logger
 from omegaconf import OmegaConf
@@ -41,7 +43,7 @@ def get_target(target_path: str) -> Any:
     """Resolve a dotted import path to a Python class or function.
 
     Trainite uses a ``_target_`` key in config files (e.g.
-    ``_target_: trainite.models.transformer.TransformerModel``) to specify which
+    ``_target_: models.rope_transformer.RoPETransformerModel``) to specify which
     class or function should be instantiated at runtime without hard-coding the
     import.  This function performs that resolution by splitting the path on the
     last dot, importing the module, and returning the named attribute.
@@ -85,7 +87,7 @@ def instantiate(config: BaseModel, **kwargs) -> Any:
     """Instantiate a class or call a function described by a Pydantic config.
 
     The config must contain a ``_target_`` field with a dotted import path (e.g.
-    ``trainite.models.transformer.TransformerModel``).  All other fields in the
+    ``models.rope_transformer.RoPETransformerModel``).  All other fields in the
     config are forwarded as keyword arguments to the target.
 
     Extra ``**kwargs`` (e.g. ``vocab_size``, ``pad_token_id``) override or
@@ -489,3 +491,99 @@ def setup_console_logger(
         output_transform=lambda output: {"loss": output["loss"].item()},
     )
     return logger
+
+
+# ==========================================
+# Experiment tracking (TensorBoard + W&B)
+# ==========================================
+
+
+def resolve_wandb_mode(mode: str) -> str:
+    """Resolve the configured W&B mode without requiring network access.
+
+    ``auto`` uses online mode only when ``WANDB_API_KEY`` is present; otherwise
+    it runs offline.  An explicit ``WANDB_MODE`` environment variable wins.
+    """
+    env_mode = os.environ.get("WANDB_MODE")
+    if env_mode:
+        return env_mode
+    if mode == "auto":
+        return "online" if os.environ.get("WANDB_API_KEY") else "offline"
+    return mode
+
+
+def setup_wandb_logging_safe(
+    config: Any,
+    run_dir: Path,
+    logging_kwargs: dict[str, Any],
+) -> Any | None:
+    """Create an Ignite ``WandBLogger`` without making training depend on W&B.
+
+    Returns ``None`` when W&B is disabled, not installed, or initialization
+    fails.  A failed online initialization is retried offline once.
+    """
+    if not getattr(config, "wandb", None) or not config.wandb.enabled:
+        return None
+
+    mode = resolve_wandb_mode(config.wandb.mode)
+    if mode == "disabled":
+        return None
+
+    try:
+        import wandb  # noqa: F401
+    except ImportError:
+        logging.getLogger("trainer").warning("wandb is not installed; W&B logging disabled.")
+        return None
+
+    init_kwargs: dict[str, Any] = {
+        "project": config.wandb.project,
+        "name": config.wandb.run_name or config.output.run_name,
+        "tags": list(config.wandb.tags),
+        "config": config.model_dump(by_alias=True, mode="json"),
+        "dir": str(run_dir),
+        "mode": mode,
+    }
+    if config.wandb.entity:
+        init_kwargs["entity"] = config.wandb.entity
+
+    logger = None
+    try:
+        logger = setup_wandb_logging(**logging_kwargs, **init_kwargs)
+    except Exception as exc:  # pragma: no cover - depends on external service
+        if mode != "offline":
+            logging.getLogger("trainer").warning(
+                "W&B initialization failed (%s); retrying in offline mode.", exc
+            )
+            try:
+                init_kwargs["mode"] = "offline"
+                logger = setup_wandb_logging(**logging_kwargs, **init_kwargs)
+            except Exception as offline_exc:  # pragma: no cover
+                logging.getLogger("trainer").warning(
+                    "W&B offline initialization failed (%s); W&B logging disabled.", offline_exc
+                )
+                return None
+        else:
+            logging.getLogger("trainer").warning("W&B initialization failed (%s); W&B logging disabled.", exc)
+            return None
+
+    try:
+        (run_dir / "wandb_run_id.txt").write_text(str(logger.run.id))
+    except Exception:  # pragma: no cover - best effort only
+        pass
+    return logger
+
+
+def write_eval_context(run_dir: Path, **values: Any) -> None:
+    """Persist the epoch/step associated with a checkpoint for evaluate.py."""
+    path = Path(run_dir) / "eval_context.json"
+    path.write_text(json.dumps(values, indent=2, sort_keys=True))
+
+
+def read_eval_context(run_dir: Path) -> dict[str, Any]:
+    path = Path(run_dir) / "eval_context.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
