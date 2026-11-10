@@ -63,6 +63,53 @@ class DataConfigBase(BaseModel):
     test: SplitConfig | None = None
 
 
+class SelfImproveFilterConfig(BaseModel):
+    """Heuristics applied to model-generated labels before they are trained on.
+
+    ``length`` is the paper's ``tau``: keep a prediction only when its length is
+    within ``tau`` digits of the gold answer length.  ``None`` disables length
+    filtering, which is the principled setting for LSB-first addition (the
+    paper reports that reverse addition needs no filtering).  Majority voting
+    (``k > 1``) is reserved for later; only ``k == 1`` is implemented today.
+    """
+
+    model_config = ConfigDict(validate_assignment=True)
+    length: int | None = Field(default=None, ge=0)
+    majority_k: int = Field(default=1, ge=1)
+    majority_threshold: float = Field(default=1.0, gt=0.0, le=1.0)
+
+
+class SelfImproveConfig(BaseModel):
+    """Settings for the resumable difficulty-curriculum driver.
+
+    Round ``r`` (1-indexed) generates problems with ``d0 + r`` digits using the
+    checkpoint from round ``r - 1``, then fine-tunes on the labelled base split
+    plus every generated round so far.
+    """
+
+    model_config = ConfigDict(validate_assignment=True)
+    enabled: bool = False
+    start_checkpoint: str
+    d0: int = Field(ge=1)
+    d_max: int = Field(ge=1)
+    rounds: int | None = Field(default=None, ge=1)
+    samples_per_round: int = Field(default=50_000, gt=0)
+    steps_per_round: int = Field(default=1_500, gt=0)
+    latest_upsample: float = Field(default=0.5, ge=0.0, lt=1.0)
+    gen_batch_size: int = Field(default=128, gt=0)
+    eval_every_rounds: int | None = Field(default=None, ge=1)
+    filter: SelfImproveFilterConfig = Field(default_factory=SelfImproveFilterConfig)
+    seed: int = 42
+
+    @model_validator(mode="after")
+    def check_range(self) -> Self:
+        if self.d_max < self.d0:
+            raise ValueError("d_max must be >= d0")
+        if self.rounds is not None and self.rounds > self.d_max - self.d0:
+            raise ValueError("rounds cannot exceed d_max - d0")
+        return self
+
+
 class DataWithAutoSplit(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
     dataset: DatasetConfig
@@ -127,5 +174,6 @@ class ProjectConfig(BaseModel):
     output: OutputConfig
     logger: Literal["tensorboard", "clearml"] = "tensorboard"
     wandb: WandbConfig = Field(default_factory=WandbConfig)
+    self_improve: SelfImproveConfig | None = None
     seed: int = 42
     device: str | None = None

@@ -46,6 +46,10 @@ coverage.xml
 .python-version
 conda_build/
 
+# Experiment artefacts (checkpoints, generated labels, logs)
+outputs/
+examples/*/outputs/
+
 .neptune/
 pytest.ini
 

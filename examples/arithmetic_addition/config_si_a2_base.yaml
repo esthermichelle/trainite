@@ -1,0 +1,129 @@
+project_name: arithmetic-addition
+preprocessor:
+  _target_: preprocessors.char_tokenizer.CharTokenizer
+  charset: 0123456789+
+model:
+  _target_: models.abacus_transformer.AbacusTransformerModel
+  collate_fn_target: models.causal_lm.CausalLMCollateFn
+  hidden_size: 256
+  num_layers: 8
+  num_heads: 8
+  feedforward_dim: 1024
+  dropout: 0.0
+  max_seq_len: 1024
+  max_offset: 100
+  digit_token_start: 5
+  num_digit_tokens: 10
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 0.001
+loss:
+  _target_: models.causal_lm.CausalLMCrossEntropyLoss
+  ignore_index: -100
+data:
+  # Labelled base split D0.  The driver mixes this with every generated round.
+  train:
+    dataset:
+      _target_: dataset_impl.arithmetic_addition.ArithmeticAdditionDataset
+      size: 150000
+      train_size: 150000
+      val_size: 5000
+      min_digits: 2
+      max_digits: 6
+      seed: 42
+      split: train
+      reverse_digits: true
+    transform:
+      _target_: dataset_impl.prompt_completion.PromptCompletionTransform
+      ignore_index: -100
+    dataloader:
+      batch_size: 128
+      shuffle: true
+      num_workers: 4
+      pin_memory: true
+      persistent_workers: true
+      prefetch_factor: 4
+  val:
+    dataset:
+      _target_: dataset_impl.arithmetic_addition.ArithmeticAdditionDataset
+      size: 5000
+      train_size: 150000
+      val_size: 5000
+      min_digits: 2
+      max_digits: 6
+      seed: 42
+      split: val
+      reverse_digits: true
+    transform:
+      _target_: dataset_impl.prompt_completion.PromptCompletionTransform
+      ignore_index: -100
+    dataloader:
+      batch_size: 128
+      shuffle: false
+      num_workers: 4
+      pin_memory: true
+      persistent_workers: true
+      prefetch_factor: 4
+  # Honest OOD split, never trained on.  Only used when eval_every_rounds is set.
+  test:
+    dataset:
+      _target_: dataset_impl.arithmetic_addition.ArithmeticAdditionDataset
+      size: 8000
+      min_digits: 13
+      max_digits: 20
+      seed: 300
+      split: test
+      reverse_digits: true
+    transform:
+      _target_: dataset_impl.prompt_completion.PromptCompletionTransform
+      ignore_index: -100
+    dataloader:
+      batch_size: 128
+      shuffle: false
+      num_workers: 4
+      pin_memory: true
+trainer:
+  epochs: 1
+  precision: float32
+  log_every_steps: 500
+  early_stopping_patience: null
+  inference_every_epochs: null
+  inference_num_samples: 5
+  max_inference_new_tokens: 32
+  grad_clip_norm: 1.0
+  eval_batch_size: 128
+  exact_match_every_epochs: null
+self_improve:
+  enabled: true
+  # A0 last checkpoint (epoch 111).  The last checkpoint, not best: ID val loss
+  # is saturated at 0.0000, so best-checkpoint selection is numerical noise.
+  start_checkpoint: outputs/sinabacus-8l-local/20261107_223116/last.pt
+  d0: 6
+  d_max: 12
+  rounds: 6
+  samples_per_round: 50000
+  steps_per_round: 1500
+  latest_upsample: 0.5
+  gen_batch_size: 128
+  # null keeps per-round evaluation out of the driver; use evaluate.py instead.
+  eval_every_rounds: null
+  filter:
+    # LSB-first addition is the paper's no-filter-needed setting.  Add a length
+    # filter only if a round collapses.
+    length: null
+    majority_k: 1
+    majority_threshold: 1.0
+  seed: 42
+output:
+  root: outputs
+  run_name: sinabacus-8l-a2-selfimprove
+logger: tensorboard
+wandb:
+  enabled: true
+  project: arithmetic-addition
+  entity: null
+  mode: auto
+  tags: [abacus, sinabacus, adamw, self-improve, a2, 6-to-12]
+  run_name: sinabacus-8l-a2-selfimprove
+seed: 42
+device: null
